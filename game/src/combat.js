@@ -101,7 +101,8 @@ function buildPickupMesh(kind) {
  *   { origin:{x,y,z}, angle, player:{x,z,onFoot},
  *     peds, cops, gang, cars, wanted,
  *     onKill(target), onHit(target), onShoot(origin),
- *     onPlayerDamage(amount, from), onPickup(kind, pickup) }
+ *     onEnemyShoot(origin), onPlayerDamage(amount, from),
+ *     onPickup(kind, pickup) }
  */
 export function createCombat(audio, random) {
   const rng = typeof random === 'function' ? random : fallbackRandom(0x5eed);

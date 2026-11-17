@@ -1,34 +1,34 @@
-// SOLMARINA — story missions and side jobs.
+// SOLMARINA — story missions, taxi fares and hidden packages.
 //
-// createMissions(world) drives the mission layer. The world owns the
+// createMissions(world) is the story layer. The world owns the
 // simulation (player, cars, peds, cops, gang, wanted level); this module
-// owns the story: which mission is active, what the current objective is,
-// where the map markers point, and what the player earns.
+// owns the narrative: which mission is active, what the current objective
+// is, where the markers point, and what the player earns.
 //
-// Contract with the world:
+// Story: Jax "Rook" Marlowe, a getaway driver, owes $50,000 to the fixer
+// Mara Voss. The Reef Kings gang and the Solmarina PD stand in his way.
+// Six story missions pay out $500, $2,000, $5,000, $9,000, $12,000 and
+// $21,500 — $50,000 in total, enough to clear the debt. Taxi fares and
+// the ten hidden packages ($100 each) are side income on top.
+//
+// Contract with the world (see world.js):
 //   world.state.player  { x, z, angle, health, onFoot, car, speed }
 //   world.state.cash, world.state.wanted, world.state.time
 //   world.state.missionId, world.state.message, world.state.markers
 //   world.state.missionsDone (array, created here if missing)
-// The HUD reads world.state.missionId / .message / .markers every frame.
 // The world calls missions.onEvent(name, data) for gameplay events:
-//   'arrive'  { x, z }            player reached a marker
-//   'steal'   { kind }            player stole a target vehicle
-//   'kill'    { kind }            player eliminated a gang member / cop
-//   'escape'  {}                  wanted level dropped to zero
-//   'deliver' { kind }            player delivered a package / vehicle
-// update(dt) is called every frame and also polls marker proximity, so a
+//   'enter-car', 'steal', 'arrive', 'deliver', 'interact', 'kill',
+//   'escape', 'wasted', 'busted'.
+// update(dt) runs every frame and also polls marker proximity, so a
 // mission still advances even if the world never fires 'arrive'.
 //
-// Everything here is deterministic: taxi fares and package spots come from
-// fixed tables and a tiny seeded counter, never from Math.random().
+// Everything here is deterministic: taxi fares and package spots come
+// from fixed tables and a rotating counter, never from Math.random().
 
-// Mission locations, all on roads or open ground in the real city grid
-// (roads at -288, -216, -144, -72, 0, 72, 144, 216, 288; beach west,
-// marina south). Markers must be reachable on foot, so none sits inside
-// a building: every spot is on a road centre line, a plaza, the beach,
-// the pier or a dock.
-const LOCATIONS = {
+// All mission spots sit on road centre lines, plazas, the beach, the pier
+// or a dock — never inside a building — so every marker is reachable on
+// foot. Roads run at -288, -216, -144, -72, 0, 72, 144, 216, 288.
+export const LOCATIONS = {
   downtown: { x: 0, z: 0, label: 'Downtown' },
   starterCar: { x: 7.6, z: 112, label: 'Your first car' },
   hotel: { x: 72, z: -30, label: 'Palms Hotel' },
@@ -47,12 +47,12 @@ const LOCATIONS = {
   maras: { x: -144, z: -144, label: "Mara's Office" },
 };
 
-// Ten hidden packages, one per landmark, spread across the five districts.
-const HIDDEN_PACKAGES = [
+// Ten hidden packages, one per landmark, spread across the districts.
+export const HIDDEN_PACKAGES = [
   { x: -410, z: 40, label: 'Package 1 — Pier end' },
   { x: -330, z: 80, label: 'Package 2 — Beach lifeguard hut' },
   { x: -60, z: 318, label: 'Package 3 — Marina fuel dock' },
-  { x: -36, z: 216, label: "Package 4 — Garage corner" },
+  { x: -36, z: 216, label: 'Package 4 — Garage corner' },
   { x: 66, z: -6, label: 'Package 5 — Hotel pool' },
   { x: 216, z: -216, label: 'Package 6 — Park fountain' },
   { x: 216, z: 216, label: 'Package 7 — Suburbs cul-de-sac' },
@@ -61,9 +61,9 @@ const HIDDEN_PACKAGES = [
   { x: 0, z: 0, label: 'Package 10 — Downtown plaza' },
 ];
 
-// Taxi drop-off points. Fares are picked in fixed rotation order so a
-// session is reproducible; the payout cycles $20, $35, $50, $60.
-const TAXI_STOPS = [
+// Taxi drop-off points. Fares are picked in fixed rotation so a session
+// is reproducible; the payout cycles $20, $35, $50, $60.
+export const TAXI_STOPS = [
   { x: 72, z: -30, label: 'Palms Hotel' },
   { x: -300, z: 40, label: 'Solmarina Pier' },
   { x: 0, z: 312, label: 'Marina' },
@@ -71,9 +71,11 @@ const TAXI_STOPS = [
   { x: 216, z: 216, label: 'Suburbs' },
   { x: 0, z: 0, label: 'Downtown plaza' },
 ];
-const TAXI_FARES = [20, 35, 50, 60];
 
+const TAXI_FARES = [20, 35, 50, 60];
 const ARRIVE_RADIUS = 14;
+const PACKAGE_REWARD = 100;
+const DEBT_GOAL = 50000;
 
 function dist(ax, az, bx, bz) {
   const dx = ax - bx;
@@ -81,26 +83,30 @@ function dist(ax, az, bx, bz) {
   return Math.sqrt(dx * dx + dz * dz);
 }
 
-function cloneMarker(loc, kind) {
+function nearPlayer(world, x, z) {
+  const p = world.state.player;
+  return !!p && dist(p.x, p.z, x, z) < ARRIVE_RADIUS;
+}
+
+function markerFor(loc, kind) {
   return { x: loc.x, z: loc.z, kind: kind || 'objective', label: loc.label };
 }
 
 // ---------------------------------------------------------------------------
-// Mission definitions. Each mission is a small state machine: an ordered
-// list of steps. A step has:
+// Mission definitions. A mission is an ordered list of steps. A step has:
 //   text    — the objective line shown in the HUD
 //   marker  — { x, z, kind, label } or null (no marker for timed steps)
-//   onEvent — (event, data, ctx) => true when this step is complete
 //   onEnter — (ctx) => void, runs once when the step becomes current
-//   update  — (dt, ctx) => true when this step is complete (timed steps)
-// ctx gives the step access to the world and to mission helpers.
+//   onEvent — (event, data, ctx) => true when this step is complete
+//   tick    — (dt, ctx) => true when this step is complete (timed / polled)
+// ctx gives a step access to the world and to the mission's scratch state.
 // ---------------------------------------------------------------------------
 
 const MISSION_DEFS = [
   {
     id: 'first-fare',
     title: 'First Fare',
-    reward: 300,
+    reward: 500,
     brief: [
       'Mara: Rook. You owe me fifty grand.',
       'Mara: Drive. I will count the fares.',
@@ -109,27 +115,19 @@ const MISSION_DEFS = [
     steps: [
       {
         text: 'Get in a car',
-        marker: cloneMarker(LOCATIONS.starterCar, 'pickup'),
-        onEvent(event, _data, ctx) {
-          return event === 'enter-car';
-        },
-        update(_dt, ctx) {
-          return !ctx.world.state.player.onFoot;
-        },
+        marker: markerFor(LOCATIONS.starterCar, 'pickup'),
+        onEvent(event) { return event === 'enter-car'; },
+        tick(_dt, ctx) { return !ctx.world.state.player.onFoot; },
       },
       {
         text: 'Pick up the client',
-        marker: cloneMarker(LOCATIONS.client, 'pickup'),
-        onEvent(event, _data, _ctx) {
-          return event === 'arrive';
-        },
+        marker: markerFor(LOCATIONS.client, 'pickup'),
+        onEvent(event) { return event === 'arrive'; },
       },
       {
         text: 'Drive the client to the Palms Hotel',
-        marker: cloneMarker(LOCATIONS.hotel, 'dropoff'),
-        onEvent(event, _data, _ctx) {
-          return event === 'arrive';
-        },
+        marker: markerFor(LOCATIONS.hotel, 'dropoff'),
+        onEvent(event) { return event === 'arrive'; },
       },
     ],
     completeText: 'Fare complete. Mara is... almost impressed.',
@@ -137,7 +135,7 @@ const MISSION_DEFS = [
   {
     id: 'hot-wheels',
     title: 'Hot Wheels',
-    reward: 800,
+    reward: 2000,
     brief: [
       'Mara: A Comet GT is parked downtown. Unlocked. Careless.',
       'Mara: Bring it to the garage. Do not scratch it.',
@@ -146,17 +144,16 @@ const MISSION_DEFS = [
     steps: [
       {
         text: 'Steal the Comet GT downtown',
-        marker: cloneMarker(LOCATIONS.comet, 'target'),
-        onEvent(event, data, _ctx) {
-          return event === 'steal' && (!data || data.kind === 'comet' || data.kind === 'car');
+        marker: markerFor(LOCATIONS.comet, 'target'),
+        onEvent(event, data) {
+          return event === 'steal'
+            && (!data || data.kind === 'comet' || data.kind === 'car');
         },
       },
       {
         text: "Deliver the Comet GT to Rook's Garage",
-        marker: cloneMarker(LOCATIONS.garage, 'dropoff'),
-        onEvent(event, _data, _ctx) {
-          return event === 'deliver' || event === 'arrive';
-        },
+        marker: markerFor(LOCATIONS.garage, 'dropoff'),
+        onEvent(event) { return event === 'deliver' || event === 'arrive'; },
       },
     ],
     completeText: 'Comet GT delivered. Clean. Mara pays up.',
@@ -164,7 +161,7 @@ const MISSION_DEFS = [
   {
     id: 'the-drop',
     title: 'The Drop',
-    reward: 1200,
+    reward: 5000,
     brief: [
       'Mara: Package on the pier. On foot. Cars draw eyes.',
       'Mara: Walk it to the marina. Slow is smooth.',
@@ -173,24 +170,26 @@ const MISSION_DEFS = [
     steps: [
       {
         text: 'Collect the package at the pier (on foot)',
-        marker: cloneMarker(LOCATIONS.packagePier, 'pickup'),
+        marker: markerFor(LOCATIONS.packagePier, 'pickup'),
         onEvent(event, _data, ctx) {
           return event === 'arrive' && ctx.world.state.player.onFoot;
         },
-        update(_dt, ctx) {
+        tick(_dt, ctx) {
           const p = ctx.world.state.player;
-          return p.onFoot && dist(p.x, p.z, LOCATIONS.packagePier.x, LOCATIONS.packagePier.z) < ARRIVE_RADIUS;
+          return p.onFoot
+            && dist(p.x, p.z, LOCATIONS.packagePier.x, LOCATIONS.packagePier.z) < ARRIVE_RADIUS;
         },
       },
       {
         text: 'Deliver the package to the marina',
-        marker: cloneMarker(LOCATIONS.marina, 'dropoff'),
+        marker: markerFor(LOCATIONS.marina, 'dropoff'),
         onEvent(event, _data, ctx) {
           return event === 'arrive' && ctx.world.state.player.onFoot;
         },
-        update(_dt, ctx) {
+        tick(_dt, ctx) {
           const p = ctx.world.state.player;
-          return p.onFoot && dist(p.x, p.z, LOCATIONS.marina.x, LOCATIONS.marina.z) < ARRIVE_RADIUS;
+          return p.onFoot
+            && dist(p.x, p.z, LOCATIONS.marina.x, LOCATIONS.marina.z) < ARRIVE_RADIUS;
         },
       },
     ],
@@ -199,7 +198,7 @@ const MISSION_DEFS = [
   {
     id: 'heat-wave',
     title: 'Heat Wave',
-    reward: 1500,
+    reward: 9000,
     brief: [
       'Mara: The Reef Kings set you up. PD is on you. Two stars.',
       'Mara: Sixty seconds. Lose them or reach the hideout.',
@@ -208,25 +207,23 @@ const MISSION_DEFS = [
     steps: [
       {
         text: 'Survive 60 seconds or reach the hideout',
-        marker: cloneMarker(LOCATIONS.hideout, 'safehouse'),
+        marker: markerFor(LOCATIONS.hideout, 'safehouse'),
         onEnter(ctx) {
+          // Forcing state.wanted is the one write the world expects from
+          // missions: the police adopt a changed state.wanted each step.
           ctx.world.state.wanted = 2;
-          ctx.mission.timer = 60;
           ctx.mission.elapsed = 0;
         },
-        onEvent(event, _data, ctx) {
-          if (event === 'escape') return true;
-          if (event === 'arrive') return true;
-          return false;
+        onEvent(event) {
+          return event === 'escape' || event === 'arrive';
         },
-        update(dt, ctx) {
+        tick(dt, ctx) {
           ctx.mission.elapsed += dt;
           const left = Math.max(0, Math.ceil(60 - ctx.mission.elapsed));
           ctx.mission.stepText = `Lose the cops — ${left}s left (or reach the hideout)`;
           if (ctx.world.state.wanted === 0) return true;
           if (ctx.mission.elapsed >= 60) return true;
-          const p = ctx.world.state.player;
-          return dist(p.x, p.z, LOCATIONS.hideout.x, LOCATIONS.hideout.z) < ARRIVE_RADIUS;
+          return nearPlayer(ctx.world, LOCATIONS.hideout.x, LOCATIONS.hideout.z);
         },
       },
     ],
@@ -238,7 +235,7 @@ const MISSION_DEFS = [
   {
     id: 'pier-pressure',
     title: 'Pier Pressure',
-    reward: 2500,
+    reward: 12000,
     brief: [
       'Mara: The Reef Kings own the pier tonight. Five of them.',
       'Mara: Take it back. Loud is fine this time.',
@@ -247,7 +244,7 @@ const MISSION_DEFS = [
     steps: [
       {
         text: 'Clear the Reef Kings at the pier (0/5)',
-        marker: cloneMarker(LOCATIONS.pier, 'combat'),
+        marker: markerFor(LOCATIONS.pier, 'combat'),
         onEnter(ctx) {
           ctx.mission.kills = 0;
         },
@@ -265,7 +262,7 @@ const MISSION_DEFS = [
   {
     id: 'big-score',
     title: 'The Big Score',
-    reward: 5000,
+    reward: 21500,
     brief: [
       'Mara: Meridian Bank. Armored van. Three stars waiting.',
       'Mara: Take the van. Lose the PD. Bring it to me.',
@@ -274,37 +271,30 @@ const MISSION_DEFS = [
     steps: [
       {
         text: 'Steal the armored van at Meridian Bank',
-        marker: cloneMarker(LOCATIONS.van, 'target'),
-        onEvent(event, data, _ctx) {
-          return event === 'steal' && (!data || data.kind === 'van' || data.kind === 'armored');
+        marker: markerFor(LOCATIONS.van, 'target'),
+        onEvent(event, data) {
+          return event === 'steal'
+            && (!data || data.kind === 'van' || data.kind === 'armored');
         },
       },
       {
         text: 'Escape the 3-star wanted level',
-        marker: cloneMarker(LOCATIONS.hideout, 'safehouse'),
+        marker: markerFor(LOCATIONS.hideout, 'safehouse'),
         onEnter(ctx) {
           ctx.world.state.wanted = 3;
-          ctx.mission.escaped = false;
         },
-        onEvent(event, _data, ctx) {
-          if (event === 'escape') {
-            ctx.mission.escaped = true;
-            return true;
-          }
-          return false;
+        onEvent(event) {
+          return event === 'escape';
         },
-        update(_dt, ctx) {
+        tick(_dt, ctx) {
           if (ctx.world.state.wanted === 0) return true;
-          const p = ctx.world.state.player;
-          return dist(p.x, p.z, LOCATIONS.hideout.x, LOCATIONS.hideout.z) < ARRIVE_RADIUS;
+          return nearPlayer(ctx.world, LOCATIONS.hideout.x, LOCATIONS.hideout.z);
         },
       },
       {
         text: "Deliver the van to Mara's office",
-        marker: cloneMarker(LOCATIONS.maras, 'dropoff'),
-        onEvent(event, _data, _ctx) {
-          return event === 'deliver' || event === 'arrive';
-        },
+        marker: markerFor(LOCATIONS.maras, 'dropoff'),
+        onEvent(event) { return event === 'deliver' || event === 'arrive'; },
       },
     ],
     completeText: 'Debt cleared. Solmarina is yours now, Rook.',
@@ -325,20 +315,14 @@ export function createMissions(world) {
   if (!Array.isArray(state.markers)) state.markers = [];
   if (typeof state.cash !== 'number') state.cash = 0;
 
-  let active = null; // { def, stepIndex, stepText, timer, elapsed, kills, escaped }
-  let taxi = null; // { stage: 'pickup'|'dropoff', stop, fare, ped }
+  // Active mission scratch state. stepText is the live objective line;
+  // timed steps rewrite it every frame (the heat-wave countdown).
+  let active = null;
+  let taxi = null; // { stage: 'pickup' | 'dropoff', pickup, stop, fare }
   let taxiCount = 0;
   const packagesFound = new Set();
   let briefLine = 0;
   let briefTimer = 0;
-
-  function setObjective(text) {
-    state.message = text;
-  }
-
-  function setMarkers(list) {
-    state.markers = list;
-  }
 
   function currentStep() {
     if (!active) return null;
@@ -350,8 +334,8 @@ export function createMissions(world) {
     if (!step) return;
     active.stepText = step.text;
     if (step.onEnter) step.onEnter({ world, mission: active });
-    setMarkers(step.marker ? [step.marker] : []);
-    setObjective(step.text);
+    state.markers = step.marker ? [step.marker] : [];
+    state.message = step.text;
   }
 
   function finishMission() {
@@ -359,32 +343,17 @@ export function createMissions(world) {
     state.cash += def.reward;
     state.missionsDone.push(def.id);
     if (def.onComplete) def.onComplete({ world, mission: active });
-    setMarkers([]);
-    setObjective('');
+    state.markers = [];
     state.missionId = null;
-    state.message = def.completeText + `  +$${def.reward}`;
+    state.message = `${def.completeText}  +$${def.reward}`;
     active = null;
     briefLine = 0;
   }
 
   function advanceStep() {
     active.stepIndex += 1;
-    if (active.stepIndex >= active.def.steps.length) {
-      finishMission();
-    } else {
-      enterStep();
-    }
-  }
-
-  function startBrief(def) {
-    // Mara's briefing lines roll out one at a time through showMessage;
-    // the first line goes out immediately, the rest in update().
-    briefLine = 0;
-    briefTimer = 0;
-    if (def.brief.length > 0) {
-      state.message = def.brief[0];
-      briefLine = 1;
-    }
+    if (active.stepIndex >= active.def.steps.length) finishMission();
+    else enterStep();
   }
 
   const api = {
@@ -412,17 +381,27 @@ export function createMissions(world) {
     get taxiActive() {
       return taxi !== null;
     },
+    get debtGoal() {
+      return DEBT_GOAL;
+    },
 
     start(id) {
       const def = MISSION_DEFS.find((d) => d.id === id);
       if (!def) return false;
       if (state.missionsDone.includes(id)) return false;
       if (active) return false;
+      // The story is linear: mission 1 must be done before the rest.
       if (id !== 'first-fare' && !state.missionsDone.includes('first-fare')) return false;
-      active = { def, stepIndex: 0, stepText: def.steps[0].text, timer: 0, elapsed: 0, kills: 0, escaped: false };
+      active = {
+        def, stepIndex: 0, stepText: def.steps[0].text,
+        elapsed: 0, kills: 0,
+      };
       state.missionId = id;
       taxi = null;
-      startBrief(def);
+      // Mara's briefing rolls out one line at a time in update().
+      briefLine = def.brief.length > 0 ? 1 : 0;
+      briefTimer = 0;
+      if (def.brief.length > 0) state.message = def.brief[0];
       enterStep();
       return true;
     },
@@ -435,36 +414,35 @@ export function createMissions(world) {
     },
 
     // --- Side jobs -------------------------------------------------------
-    // Taxi fare: repeatable after mission 1. Call when the player is
-    // driving; a ped is "picked up" by reaching the pickup marker, then
-    // the fare is paid on reaching the drop-off marker.
+    // Taxi fare: repeatable after mission 1. The player picks up a fare
+    // at the pickup marker (while driving), then earns the fare on
+    // reaching the drop-off marker. Proximity is polled in update().
     startTaxi() {
       if (active || taxi) return false;
       if (!state.missionsDone.includes('first-fare')) return false;
       const stop = TAXI_STOPS[taxiCount % TAXI_STOPS.length];
       const fare = TAXI_FARES[taxiCount % TAXI_FARES.length];
       taxiCount += 1;
-      // Pick-up point: a fixed kerb spot near the player's current area,
-      // chosen from the stop list so it is always reachable.
+      // Pick-up point: a fixed kerb spot from the stop list, always
+      // reachable, offset from the drop-off so the fare is a real drive.
       const pickup = TAXI_STOPS[(taxiCount + 2) % TAXI_STOPS.length];
       taxi = { stage: 'pickup', pickup, stop, fare };
       state.missionId = 'taxi';
-      setMarkers([cloneMarker(pickup, 'pickup')]);
-      setObjective(`Taxi: pick up the fare at ${pickup.label}`);
+      state.markers = [markerFor(pickup, 'pickup')];
       state.message = `Taxi job — pick up at ${pickup.label} ($${fare} fare)`;
       return true;
     },
 
-    // Hidden packages: 10 fixed spots. Call with the player's position
-    // (or rely on update()'s proximity poll) to collect one.
+    // Hidden packages: 10 fixed spots, $100 each. Call with the player's
+    // position (update() polls this every frame, mission or not).
     collectPackageAt(x, z) {
       for (let i = 0; i < HIDDEN_PACKAGES.length; i += 1) {
         if (packagesFound.has(i)) continue;
         const p = HIDDEN_PACKAGES[i];
         if (dist(x, z, p.x, p.z) < ARRIVE_RADIUS) {
           packagesFound.add(i);
-          state.cash += 100;
-          state.message = `Hidden package found! (${packagesFound.size}/10)  +$100`;
+          state.cash += PACKAGE_REWARD;
+          state.message = `Hidden package found! (${packagesFound.size}/10)  +$${PACKAGE_REWARD}`;
           return true;
         }
       }
@@ -472,9 +450,9 @@ export function createMissions(world) {
     },
 
     get hiddenPackageMarkers() {
-      return HIDDEN_PACKAGES.filter((_, i) => !packagesFound.has(i)).map((p) => ({
-        x: p.x, z: p.z, kind: 'package', label: p.label,
-      }));
+      return HIDDEN_PACKAGES
+        .filter((_, i) => !packagesFound.has(i))
+        .map((p) => ({ x: p.x, z: p.z, kind: 'package', label: p.label }));
     },
 
     update(dt) {
@@ -489,9 +467,7 @@ export function createMissions(world) {
       }
 
       // Hidden packages are always collectable, mission or not.
-      if (state.player) {
-        api.collectPackageAt(state.player.x, state.player.z);
-      }
+      if (state.player) api.collectPackageAt(state.player.x, state.player.z);
 
       // Taxi job proximity polling.
       if (taxi && state.player) {
@@ -499,16 +475,15 @@ export function createMissions(world) {
         if (dist(state.player.x, state.player.z, target.x, target.z) < ARRIVE_RADIUS) {
           if (taxi.stage === 'pickup') {
             taxi.stage = 'dropoff';
-            setMarkers([cloneMarker(taxi.stop, 'dropoff')]);
-            setObjective(`Taxi: drop the fare at ${taxi.stop.label}`);
+            state.markers = [markerFor(taxi.stop, 'dropoff')];
             state.message = `Fare aboard — take them to ${taxi.stop.label}`;
           } else {
             state.cash += taxi.fare;
             state.message = `Fare complete!  +$${taxi.fare}`;
             taxi = null;
             state.missionId = active ? active.def.id : null;
-            setMarkers([]);
-            setObjective('');
+            state.markers = [];
+            state.message = '';
           }
         }
       }
@@ -518,25 +493,23 @@ export function createMissions(world) {
       const step = currentStep();
       if (!step) return;
       const ctx = { world, mission: active };
-      if (step.update && step.update(dt, ctx)) {
+      if (step.tick && step.tick(dt, ctx)) {
         advanceStep();
         return;
       }
-      // Proximity fallback for marker steps: arriving counts even if the
-      // world never fired 'arrive'. Steps with a custom onEvent that
-      // needs more than arrival (steal / kill / on-foot) still rely on
-      // their own update() for the on-foot case; plain arrival steps
-      // advance here.
-      if (step.marker && !step.update) {
-        const p = state.player;
-        if (p && dist(p.x, p.z, step.marker.x, step.marker.z) < ARRIVE_RADIUS) {
-          if (step.onEvent && step.onEvent('arrive', { x: p.x, z: p.z }, ctx)) {
+      // Proximity fallback for plain marker steps: arriving counts even
+      // if the world never fired 'arrive'. Steps with a tick of their own
+      // (timed / on-foot steps) already handled arrival above.
+      if (step.marker && !step.tick && state.player) {
+        if (dist(state.player.x, state.player.z, step.marker.x, step.marker.z) < ARRIVE_RADIUS) {
+          if (step.onEvent && step.onEvent('arrive', { x: state.player.x, z: state.player.z }, ctx)) {
             advanceStep();
+            return;
           }
         }
       }
-      // Keep the HUD objective line fresh (timers rewrite stepText).
-      if (active) setObjective(active.stepText || step.text);
+      // Keep the HUD objective line fresh (timed steps rewrite stepText).
+      if (active) state.message = active.stepText || step.text;
     },
 
     onEvent(name, data) {
@@ -549,9 +522,7 @@ export function createMissions(world) {
         // Only count arrivals at the current marker, not anywhere.
         if (dist(state.player.x, state.player.z, step.marker.x, step.marker.z) >= ARRIVE_RADIUS) return;
       }
-      if (step.onEvent(name, data || {}, ctx)) {
-        advanceStep();
-      }
+      if (step.onEvent(name, data || {}, ctx)) advanceStep();
     },
 
     // Restore save data (snapshot.missionsDone, snapshot.packagesFound).
@@ -578,5 +549,3 @@ export function createMissions(world) {
 
   return api;
 }
-
-export { LOCATIONS, HIDDEN_PACKAGES, TAXI_STOPS };

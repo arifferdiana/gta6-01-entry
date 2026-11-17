@@ -18,9 +18,18 @@
 // HUD and the city module agree: the ground plane runs x and z from -360
 // to 360 (road grid -288..288, sand beach on the west (-x) edge, marina
 // water along the south (+z) edge). North is -z (up on the minimap).
+//
+// Buttons dispatch 'solmarina' CustomEvents on the document with
+// detail.action in { new-game, continue, resume, retry, to-title }.
+// Menu screens hide all gameplay chrome via the .sm-in-menu class on the
+// HUD root, so the title screen never shows stars, cash, the objective
+// line or the minimap.
+
 const CITY_MIN = -360;
 const CITY_MAX = 360;
-const CITY_SIZE = CITY_MAX - CITY_MIN;
+const CITY_SPAN = CITY_MAX - CITY_MIN;
+const MAP_SIZE = 220;
+const SAVE_KEY = 'solmarina.save.v1';
 
 const MARKER_COLORS = {
   objective: '#ffd23f',
@@ -48,22 +57,19 @@ function formatClock(time) {
   const t = ((time || 0) % 24 + 24) % 24;
   const h = Math.floor(t);
   const m = Math.floor((t - h) * 60);
-  const hh = String(h).padStart(2, '0');
-  const mm = String(m).padStart(2, '0');
-  return `${hh}:${mm}`;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 
 function formatSpeed(speed) {
   // World speed is metres per second; show km/h.
-  const kmh = Math.round(Math.abs(speed || 0) * 3.6);
-  return `${kmh} km/h`;
+  return `${Math.round(Math.abs(speed || 0) * 3.6)} km/h`;
 }
 
 export function createHud(document) {
   const root = el(document, 'div', 'sm-hud');
   document.body.appendChild(root);
 
-  // --- Top-left: wanted stars + cash -------------------------------------
+  // --- Top-left: wanted stars + cash --------------------------------------
   const topLeft = el(document, 'div', 'sm-topleft');
   const stars = el(document, 'div', 'sm-stars');
   const cash = el(document, 'div', 'sm-cash', '$0');
@@ -71,15 +77,15 @@ export function createHud(document) {
   topLeft.appendChild(cash);
   root.appendChild(topLeft);
 
-  // --- Top-right: clock ----------------------------------------------------
+  // --- Top-right: clock -----------------------------------------------------
   const clock = el(document, 'div', 'sm-clock', '12:00');
   root.appendChild(clock);
 
-  // --- Centre-top: message toasts ------------------------------------------
+  // --- Centre-top: message toasts -------------------------------------------
   const toasts = el(document, 'div', 'sm-toasts');
   root.appendChild(toasts);
 
-  // --- Centre: objective ----------------------------------------------------
+  // --- Centre: objective ------------------------------------------------------
   const objective = el(document, 'div', 'sm-objective');
   const objectiveText = el(document, 'span', 'sm-objective-text');
   const objectiveDist = el(document, 'span', 'sm-objective-dist');
@@ -87,7 +93,7 @@ export function createHud(document) {
   objective.appendChild(objectiveDist);
   root.appendChild(objective);
 
-  // --- Bottom-left: health bar + minimap ------------------------------------
+  // --- Bottom-left: health bar + minimap ---------------------------------------
   const bottomLeft = el(document, 'div', 'sm-bottomleft');
   const healthWrap = el(document, 'div', 'sm-health-wrap');
   const healthLabel = el(document, 'span', 'sm-health-label', 'HEALTH');
@@ -97,14 +103,14 @@ export function createHud(document) {
   healthWrap.appendChild(healthLabel);
   healthWrap.appendChild(healthBar);
   const mapCanvas = el(document, 'canvas', 'sm-minimap');
-  mapCanvas.width = 220;
-  mapCanvas.height = 220;
+  mapCanvas.width = MAP_SIZE;
+  mapCanvas.height = MAP_SIZE;
   bottomLeft.appendChild(healthWrap);
   bottomLeft.appendChild(mapCanvas);
   root.appendChild(bottomLeft);
   const mapCtx = mapCanvas.getContext('2d');
 
-  // --- Bottom-right: speed + ammo -------------------------------------------
+  // --- Bottom-right: speed + ammo ----------------------------------------------
   const bottomRight = el(document, 'div', 'sm-bottomright');
   const speed = el(document, 'div', 'sm-speed', '0 km/h');
   const ammo = el(document, 'div', 'sm-ammo', '');
@@ -112,7 +118,7 @@ export function createHud(document) {
   bottomRight.appendChild(ammo);
   root.appendChild(bottomRight);
 
-  // --- Screens ---------------------------------------------------------------
+  // --- Screens ------------------------------------------------------------------
   function makeScreen(name) {
     const screen = el(document, 'div', `sm-screen sm-screen-${name}`);
     screen.style.display = 'none';
@@ -121,7 +127,18 @@ export function createHud(document) {
   }
 
   function dispatch(action) {
-    document.dispatchEvent(new document.defaultView.CustomEvent('solmarina', { detail: { action } }));
+    const view = document.defaultView;
+    document.dispatchEvent(new view.CustomEvent('solmarina', { detail: { action } }));
+  }
+
+  // Does a save exist? The Continue button only appears when one does.
+  function hasSave() {
+    try {
+      const view = document.defaultView;
+      return !!(view && view.localStorage && view.localStorage.getItem(SAVE_KEY));
+    } catch {
+      return false;
+    }
   }
 
   // Title screen.
@@ -180,8 +197,6 @@ export function createHud(document) {
 
   const screens = { title: titleScreen, howto: howScreen, pause: pauseScreen, gameover: overScreen };
   let currentScreen = 'title';
-  let lastObjective = '';
-  let toastTimer = 0;
 
   function setScreen(name) {
     // name: 'title' | 'howto' | 'pause' | 'gameover' | 'game'
@@ -195,6 +210,11 @@ export function createHud(document) {
     if (!screen) return;
     currentScreen = name;
     root.classList.add('sm-in-menu');
+    // Refresh the Continue button every time the title shows: a save may
+    // have appeared since the HUD was built (e.g. after a pause-save).
+    if (name === 'title') {
+      btnContinue.style.display = hasSave() ? '' : 'none';
+    }
     screen.style.display = 'flex';
   }
 
@@ -220,11 +240,12 @@ export function createHud(document) {
     objectiveDist.textContent = (dist === undefined || dist === null) ? '' : `${Math.round(dist)}m`;
   }
 
-  // --- Minimap ---------------------------------------------------------------
+  // --- Minimap ------------------------------------------------------------------
   function toMap(x, z) {
-    const mx = ((x - CITY_MIN) / CITY_SIZE) * mapCanvas.width;
-    const my = ((z - CITY_MIN) / CITY_SIZE) * mapCanvas.height;
-    return [mx, my];
+    return [
+      ((x - CITY_MIN) / CITY_SPAN) * mapCanvas.width,
+      ((z - CITY_MIN) / CITY_SPAN) * mapCanvas.height,
+    ];
   }
 
   function drawMinimap(state) {
@@ -239,7 +260,6 @@ export function createHud(document) {
     const [beachX] = toMap(-288, 0);
     ctx.fillStyle = '#e8d28a';
     ctx.fillRect(0, 0, beachX, h);
-    // Ocean beyond the beach (far west).
     ctx.fillStyle = '#2f7fc2';
     ctx.fillRect(0, 0, 10, h);
     // Marina water along the south edge.
@@ -258,12 +278,13 @@ export function createHud(document) {
       ctx.beginPath(); ctx.moveTo(0, my); ctx.lineTo(w, my); ctx.stroke();
     });
 
-    // Mission markers.
+    // Mission markers as diamonds.
     (state.markers || []).forEach((m) => {
       const [mx, my] = toMap(m.x, m.z);
       ctx.fillStyle = MARKER_COLORS[m.kind] || MARKER_COLORS.objective;
       ctx.beginPath();
-      ctx.moveTo(mx, my - 7); ctx.lineTo(mx + 6, my); ctx.lineTo(mx, my + 7); ctx.lineTo(mx - 6, my);
+      ctx.moveTo(mx, my - 7); ctx.lineTo(mx + 6, my);
+      ctx.lineTo(mx, my + 7); ctx.lineTo(mx - 6, my);
       ctx.closePath(); ctx.fill();
       ctx.strokeStyle = '#000000';
       ctx.lineWidth = 1;
@@ -318,12 +339,12 @@ export function createHud(document) {
     ctx.stroke();
   }
 
-  // --- Per-frame update -------------------------------------------------------
+  // --- Per-frame update ----------------------------------------------------------
   function update(state) {
     if (!state) return;
     const player = state.player || {};
 
-    // Wanted stars (0-5).
+    // Wanted stars (0-5); the CSS pulses them while wanted.
     const wanted = Math.max(0, Math.min(5, state.wanted || 0));
     let starText = '';
     for (let i = 0; i < 5; i += 1) starText += i < wanted ? '★' : '☆';
@@ -339,8 +360,9 @@ export function createHud(document) {
     healthFill.classList.toggle('sm-health-low', health <= 25);
     healthWrap.style.display = currentScreen === 'game' ? 'flex' : 'none';
 
-    // Speed + ammo (bottom-right). Speed only matters while driving;
-    // ammo only shows when the player has a weapon.
+    // Speed + ammo (bottom-right). Speed only matters while driving: on
+    // foot the element is hidden rather than left showing a stale or
+    // wrong live value. Ammo only shows when the player has a weapon.
     if (!player.onFoot) {
       speed.textContent = formatSpeed(player.speed);
       speed.style.display = 'block';
@@ -356,16 +378,11 @@ export function createHud(document) {
 
     // Objective: state.message is the mission layer's objective line.
     // Distance is measured to the first marker.
-    if (state.message && state.message !== lastObjective) {
-      lastObjective = state.message;
-    }
     if (state.message) {
       let dist = null;
       if (state.markers && state.markers.length > 0) {
         const m = state.markers[0];
-        const dx = player.x - m.x;
-        const dz = player.z - m.z;
-        dist = Math.sqrt(dx * dx + dz * dz);
+        dist = Math.hypot(player.x - m.x, player.z - m.z);
       }
       showObjective(state.message, dist);
     } else if (!state.missionId) {
@@ -373,13 +390,9 @@ export function createHud(document) {
     }
 
     drawMinimap(state);
-
-    // Toast housekeeping: toasts remove themselves on timers.
-    toastTimer += 1;
-    void toastTimer;
   }
 
-  // Start on the title screen.
+  // Start on the title screen (gameplay chrome hidden by .sm-in-menu).
   setScreen('title');
 
   return {

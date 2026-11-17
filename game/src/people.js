@@ -51,7 +51,7 @@ function moveWithCollision(city, x, z, dx, dz, r) {
 
 // --- Person models ---------------------------------------------------------
 
-function box(w, h, d, material, x, y, z) {
+function part(w, h, d, material, x, y, z) {
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material);
   mesh.position.set(x, y, z);
   return mesh;
@@ -74,17 +74,14 @@ export function buildPersonModel(shirtColor, kind = 'ped') {
   const hair = new THREE.MeshLambertMaterial({ color: 0x2b2118 });
   const figure = new THREE.Group();
 
-  const body = box(0.72, 0.85, 0.4, shirt, 0, 1.15, 0);
-  figure.add(body);
-  const head = box(0.42, 0.42, 0.42, skin, 0, 1.85, 0);
-  figure.add(head);
-  figure.add(box(0.44, 0.16, 0.44, hair, 0, 2.1, 0));
+  figure.add(part(0.72, 0.85, 0.4, shirt, 0, 1.15, 0));
+  figure.add(part(0.42, 0.42, 0.42, skin, 0, 1.85, 0));
+  figure.add(part(0.44, 0.16, 0.44, hair, 0, 2.1, 0));
 
   function limb(w, h, d, material, px, py) {
     const pivot = new THREE.Group();
     pivot.position.set(px, py, 0);
-    const mesh = box(w, h, d, material, 0, -h / 2, 0);
-    pivot.add(mesh);
+    pivot.add(part(w, h, d, material, 0, -h / 2, 0));
     figure.add(pivot);
     return pivot;
   }
@@ -96,14 +93,14 @@ export function buildPersonModel(shirtColor, kind = 'ped') {
 
   if (kind === 'cop') {
     // Cap brim + badge.
-    figure.add(box(0.46, 0.1, 0.46,
+    figure.add(part(0.46, 0.1, 0.46,
       new THREE.MeshLambertMaterial({ color: 0x16264d }), 0, 2.08, 0));
-    figure.add(box(0.12, 0.12, 0.03,
+    figure.add(part(0.12, 0.12, 0.03,
       new THREE.MeshBasicMaterial({ color: 0xffd94d }), -0.18, 1.35, 0.21));
   }
   if (kind === 'gang') {
     // Red headband.
-    figure.add(box(0.44, 0.09, 0.44,
+    figure.add(part(0.44, 0.09, 0.44,
       new THREE.MeshLambertMaterial({ color: 0xc0392b }), 0, 1.98, 0));
   }
   figure.userData = { kind, height: 1.9, armL, armR, legL, legR };
@@ -132,8 +129,8 @@ export function animateWalk(mesh, dt, speed01) {
 
 /**
  * ~26 pedestrians strolling the sidewalks. A ped:
- * { mesh, kind:'ped', x, z, angle, speed, target, state, waitTimer,
- *   fleeTimer, fleeX, fleeZ, health, dead, walkPhase }.
+ * { mesh, kind:'ped', x, z, angle, speed, walkSpeed, target, state,
+ *   waitTimer, fleeTimer, fleeX, fleeZ, health, dead, walkPhase, reported }.
  * state is 'walk', 'wait' or 'flee'. update() takes an optional danger
  * point {x, z} (gunfire / crime) that makes nearby peds run away.
  */
@@ -164,6 +161,7 @@ export function createPedestrians(city, random) {
       fleeZ: 0,
       health: 100,
       dead: false,
+      reported: false,
       walkPhase: random() * 6,
     };
     mesh.position.set(x, 0, z);
@@ -275,8 +273,8 @@ export function createPedestrians(city, random) {
 // --- Foot cops -------------------------------------------------------------
 
 /**
- * Foot cops. A cop: { mesh, kind:'cop', x, z, angle, speed, health, dead,
- *   onFoot:true, car:null, chaseTimer }.
+ * Foot cops. A cop: { mesh, kind:'cop', x, z, angle, speed, walkSpeed,
+ *   health, dead, onFoot:true, car:null, chaseTimer, reported }.
  * ensure(count, nearX, nearZ) keeps the roster at count, spawning on roads
  * near the player. update(dt, player, chasing) runs them at the player and
  * reports { touching, nearest } — touching means a cop is close enough to
@@ -290,7 +288,7 @@ export function createCops(city, random) {
     const cop = {
       mesh, kind: 'cop', x, z, angle: 0, speed: 0,
       walkSpeed: 7.5, health: 100, dead: false,
-      onFoot: true, car: null, chaseTimer: 0,
+      onFoot: true, car: null, chaseTimer: 0, reported: false,
     };
     mesh.position.set(x, 0, z);
     cops.push(cop);
@@ -382,7 +380,8 @@ export function createPeople(city, random, audio) {
         mesh, kind: 'gang',
         x: x + (random() * 6 - 3), z: z + (random() * 6 - 3),
         angle: 0, speed: 0, walkSpeed: 3.6,
-        health: 100, dead: false, shootTimer: 1 + random(),
+        health: 100, dead: false, reported: false,
+        shootTimer: 1 + random(),
         walkPhase: random() * 6,
       };
       mesh.position.set(g.x, 0, g.z);
@@ -436,6 +435,7 @@ export function createPeople(city, random, audio) {
     copManager,
     update,
     spawnGang,
+    spawnPed: pedestrians.spawnPed,
     spawnCop: copManager.spawnCop,
     ensureCops: copManager.ensure,
     fleeFrom: pedestrians.fleeFrom,

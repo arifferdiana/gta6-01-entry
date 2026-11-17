@@ -1,19 +1,18 @@
-// SOLMARINA — vehicles: car models, traffic, parked cars, player driving.
+// SOLMARINA — vehicles: car models, street traffic, parked cars, driving.
 // Original code and art for this game. No Rockstar / GTA names, art or assets.
 //
-// NOTE ON RENDERING: render.js owns every mesh it paints — it rebuilds cars
-// from the plain state data (x, z, angle, color, model) each frame. The
-// three.js groups built here (buildCarModel) are therefore NOT added to the
-// scene by this module; they exist so a car can be inspected / reused as a
-// model, and the live simulation is the plain car objects below. That keeps
-// one car per car on screen instead of two.
+// render.js owns every mesh it paints: it rebuilds cars from the plain
+// state data (x, z, angle, color, model) each frame. The three.js groups
+// built by buildCarModel are therefore NOT added to the scene here; they
+// exist so a car can be inspected or reused as a model. The live simulation
+// is the plain car objects below, which keeps one car per car on screen.
 
 import * as THREE from 'three';
 import { CAR, CITY, TRAFFIC } from './config.js';
 
 export const CAR_KINDS = ['sedan', 'taxi', 'sports', 'van', 'police', 'truck'];
 
-/** Per-kind tuning. topSpeed overrides CAR.maxSpeed; everything else is shared. */
+/** Per-kind tuning. Sedan and sports read their top speeds from CAR. */
 export const CAR_STATS = {
   sedan: { length: 4.4, width: 1.9, bodyH: 0.62, topSpeed: CAR.maxSpeed, accel: CAR.accel, color: 0x3a7bd5 },
   taxi: { length: 4.4, width: 1.9, bodyH: 0.62, topSpeed: 40, accel: CAR.accel, color: 0xf2c94c },
@@ -30,6 +29,7 @@ export const TRAFFIC_COLORS = [
 
 const TRAFFIC_COUNT = TRAFFIC.cars || 14;
 const PARKED_COUNT = 10;
+/** How far right of a road centre line a lane sits (right-hand traffic). */
 const LANE_OFFSET = 3;
 
 function clamp(v, a, b) {
@@ -42,15 +42,14 @@ function approach(v, target, step) {
   return v;
 }
 
-/** Road centre lines: -288, -216, ..., 288 (interior lines only, for lanes). */
+/** Interior road centre lines: -216, -144, ..., 216 across the grid. */
 function roadLines() {
   const lines = [];
-  const half = CITY.half;
-  for (let p = -half + CITY.pitch; p < half - 1; p += CITY.pitch) lines.push(p);
+  for (let p = -CITY.half + CITY.pitch; p < CITY.half - 1; p += CITY.pitch) lines.push(p);
   return lines;
 }
 
-/** Read a -1..1 axis from a plain input object, or from input.move()/axis(). */
+/** Read a -1..1 axis from a plain input object, or from input.move(). */
 function readAxis(input, names, fallback) {
   if (!input) return fallback;
   for (const name of names) {
@@ -83,9 +82,9 @@ function readBool(input, names, fallback) {
 }
 
 /**
- * Push a circle out of the city's building AABBs. city.collideCircle returns
- * the corrected position {x, z}; a move counts as a hit when it changed.
- * Axis-separated so cars slide along walls instead of sticking to them.
+ * Push a circle out of the city's building AABBs, axis by axis so a car
+ * slides along a wall instead of sticking to it. city.collideCircle returns
+ * the corrected position {x, z}; the move counts as a hit when it changed.
  */
 function moveWithCollision(city, x, z, dx, dz, r) {
   if (!city || typeof city.collideCircle !== 'function') {
@@ -113,16 +112,16 @@ function moveWithCollision(city, x, z, dx, dz, r) {
 
 // --- Car models ------------------------------------------------------------
 
-function box(w, h, d, material, x, y, z) {
+function part(w, h, d, material, x, y, z) {
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material);
   mesh.position.set(x, y, z);
   return mesh;
 }
 
-function wheelMesh(tyreMat, hubMat, x, y, z) {
-  const geo = new THREE.CylinderGeometry(0.34, 0.34, 0.26, 14);
-  geo.rotateZ(Math.PI / 2);
-  const wheel = new THREE.Mesh(geo, tyreMat);
+function makeWheel(tyreMat, hubMat, x, y, z) {
+  const tyreGeo = new THREE.CylinderGeometry(0.34, 0.34, 0.26, 14);
+  tyreGeo.rotateZ(Math.PI / 2);
+  const wheel = new THREE.Mesh(tyreGeo, tyreMat);
   const hubGeo = new THREE.CylinderGeometry(0.16, 0.16, 0.28, 10);
   hubGeo.rotateZ(Math.PI / 2);
   wheel.add(new THREE.Mesh(hubGeo, hubMat));
@@ -131,9 +130,9 @@ function wheelMesh(tyreMat, hubMat, x, y, z) {
 }
 
 /**
- * Build a low-poly car from three.js boxes. Model forward is +z; the group
- * sits with its wheels on y = 0. userData carries {kind, length, width,
- * wheels} so the simulation can spin the wheels.
+ * Build a low-poly car from three.js boxes. Model forward is +z, wheels
+ * touch y = 0. userData carries {kind, length, width, wheels} so the
+ * simulation can spin the wheels.
  */
 export function buildCarModel(color, kind = 'sedan') {
   const spec = CAR_STATS[kind] || CAR_STATS.sedan;
@@ -143,52 +142,58 @@ export function buildCarModel(color, kind = 'sedan') {
   const glass = new THREE.MeshStandardMaterial({ color: 0x18242e, roughness: 0.12, metalness: 0.7 });
   const tyre = new THREE.MeshStandardMaterial({ color: 0x14161a, roughness: 0.95 });
   const hub = new THREE.MeshStandardMaterial({ color: 0xc8ccd2, roughness: 0.3, metalness: 0.8 });
-  const lightFront = new THREE.MeshBasicMaterial({ color: 0xfff3b0 });
-  const lightRear = new THREE.MeshBasicMaterial({ color: 0xd43d2a });
+  const headlight = new THREE.MeshBasicMaterial({ color: 0xfff3b0 });
+  const taillight = new THREE.MeshBasicMaterial({ color: 0xd43d2a });
   const group = new THREE.Group();
   const L = spec.length;
   const W = spec.width;
   const H = spec.bodyH;
   const bodyY = 0.34 + H / 2;
 
-  group.add(box(W, H, L, paint, 0, bodyY, 0));
-  group.add(box(W * 0.98, 0.16, 0.18, tyre, 0, 0.42, L / 2));
-  group.add(box(W * 0.98, 0.16, 0.18, tyre, 0, 0.42, -L / 2));
+  // Main body slab, plus dark bumpers at both ends.
+  group.add(part(W, H, L, paint, 0, bodyY, 0));
+  group.add(part(W * 0.98, 0.16, 0.18, tyre, 0, 0.42, L / 2));
+  group.add(part(W * 0.98, 0.16, 0.18, tyre, 0, 0.42, -L / 2));
 
   if (kind === 'truck') {
-    // Cab at the front, cargo box behind it.
-    group.add(box(W * 0.94, 0.85, L * 0.26, paint, 0, bodyY + H / 2 + 0.42, L * 0.36));
-    group.add(box(W * 0.8, 0.5, 0.08, glass, 0, bodyY + H / 2 + 0.5, L * 0.5));
-    group.add(box(W * 0.96, 1.15, L * 0.58,
+    // Cab up front, tall cargo box behind it.
+    group.add(part(W * 0.94, 0.85, L * 0.26, paint, 0, bodyY + H / 2 + 0.42, L * 0.36));
+    group.add(part(W * 0.8, 0.5, 0.08, glass, 0, bodyY + H / 2 + 0.5, L * 0.5));
+    group.add(part(W * 0.96, 1.15, L * 0.58,
       new THREE.MeshStandardMaterial({ color: 0x9aa4ae, roughness: 0.6, metalness: 0.4 }),
       0, bodyY + H / 2 + 0.55, -L * 0.2));
   } else if (kind === 'van') {
-    group.add(box(W * 0.94, 0.95, L * 0.72, paint, 0, bodyY + H / 2 + 0.47, -L * 0.08));
-    group.add(box(W * 0.8, 0.55, 0.08, glass, 0, bodyY + H / 2 + 0.62, L * 0.3));
-    group.add(box(0.08, 0.5, L * 0.5, glass, W * 0.47, bodyY + H / 2 + 0.55, -L * 0.08));
-    group.add(box(0.08, 0.5, L * 0.5, glass, -W * 0.47, bodyY + H / 2 + 0.55, -L * 0.08));
+    // One tall box body with a windscreen and side windows.
+    group.add(part(W * 0.94, 0.95, L * 0.72, paint, 0, bodyY + H / 2 + 0.47, -L * 0.08));
+    group.add(part(W * 0.8, 0.55, 0.08, glass, 0, bodyY + H / 2 + 0.62, L * 0.3));
+    group.add(part(0.08, 0.5, L * 0.5, glass, W * 0.47, bodyY + H / 2 + 0.55, -L * 0.08));
+    group.add(part(0.08, 0.5, L * 0.5, glass, -W * 0.47, bodyY + H / 2 + 0.55, -L * 0.08));
   } else {
-    group.add(box(W * 0.8, 0.52, L * 0.46, glass, 0, bodyY + H / 2 + 0.26, -L * 0.04));
-    group.add(box(W * 0.84, 0.09, L * 0.5, paint, 0, bodyY + H / 2 + 0.56, -L * 0.04));
+    // Cabin glass plus a roof panel over it.
+    group.add(part(W * 0.8, 0.52, L * 0.46, glass, 0, bodyY + H / 2 + 0.26, -L * 0.04));
+    group.add(part(W * 0.84, 0.09, L * 0.5, paint, 0, bodyY + H / 2 + 0.56, -L * 0.04));
   }
 
-  group.add(box(0.36, 0.13, 0.07, lightFront, -W * 0.3, bodyY + 0.05, L / 2 + 0.01));
-  group.add(box(0.36, 0.13, 0.07, lightFront, W * 0.3, bodyY + 0.05, L / 2 + 0.01));
-  group.add(box(0.36, 0.13, 0.07, lightRear, -W * 0.3, bodyY + 0.05, -L / 2 - 0.01));
-  group.add(box(0.36, 0.13, 0.07, lightRear, W * 0.3, bodyY + 0.05, -L / 2 - 0.01));
+  // Headlights and taillights.
+  group.add(part(0.36, 0.13, 0.07, headlight, -W * 0.3, bodyY + 0.05, L / 2 + 0.01));
+  group.add(part(0.36, 0.13, 0.07, headlight, W * 0.3, bodyY + 0.05, L / 2 + 0.01));
+  group.add(part(0.36, 0.13, 0.07, taillight, -W * 0.3, bodyY + 0.05, -L / 2 - 0.01));
+  group.add(part(0.36, 0.13, 0.07, taillight, W * 0.3, bodyY + 0.05, -L / 2 - 0.01));
 
   if (kind === 'taxi') {
-    group.add(box(0.72, 0.16, 0.3,
+    // Roof sign.
+    group.add(part(0.72, 0.16, 0.3,
       new THREE.MeshStandardMaterial({ color: 0xfff6c9, roughness: 0.4 }),
       0, bodyY + H / 2 + 0.68, -L * 0.04));
   }
   if (kind === 'police') {
-    group.add(box(W * 0.86, 0.1, L * 0.52,
+    // White roof panel and a red/blue light bar.
+    group.add(part(W * 0.86, 0.1, L * 0.52,
       new THREE.MeshStandardMaterial({ color: 0xf2f4f6, roughness: 0.4 }),
       0, bodyY + H / 2 + 0.6, -L * 0.04));
-    group.add(box(0.5, 0.12, 0.3, new THREE.MeshBasicMaterial({ color: 0xe0392c }),
+    group.add(part(0.5, 0.12, 0.3, new THREE.MeshBasicMaterial({ color: 0xe0392c }),
       -0.26, bodyY + H / 2 + 0.72, -L * 0.04));
-    group.add(box(0.5, 0.12, 0.3, new THREE.MeshBasicMaterial({ color: 0x2f6fe0 }),
+    group.add(part(0.5, 0.12, 0.3, new THREE.MeshBasicMaterial({ color: 0x2f6fe0 }),
       0.26, bodyY + H / 2 + 0.72, -L * 0.04));
   }
 
@@ -197,7 +202,7 @@ export function buildCarModel(color, kind = 'sedan') {
   const wx = W / 2 - 0.06;
   for (const sx of [-1, 1]) {
     for (const sz of [-1, 1]) {
-      const wheel = wheelMesh(tyre, hub, sx * wx, 0.34, sz * wz);
+      const wheel = makeWheel(tyre, hub, sx * wx, 0.34, sz * wz);
       group.add(wheel);
       wheels.push(wheel);
     }
@@ -210,12 +215,12 @@ export function buildCarModel(color, kind = 'sedan') {
 
 /**
  * Traffic manager: a fixed pool of cars driving the road grid on right-hand
- * lanes. Cars slow for the car ahead, sometimes yield at intersections,
+ * lanes. Cars slow for the car ahead, sometimes pause at intersections,
  * brake for the player's car, and despawn / respawn near the player so the
  * streets around them always feel busy.
  *
  * A traffic car: { mesh, kind, model, color, axis, dir, lane, pos,
- *   x, z, angle, speed, targetSpeed, stopTimer }.
+ *   x, z, angle, speed, targetSpeed, stopTimer, disabled }.
  * Forward is (sin(angle), cos(angle)): angle 0 is +z, PI/2 is +x.
  */
 export function createTraffic(city, random) {
@@ -262,7 +267,7 @@ export function createTraffic(city, random) {
     placeOnRoad(car);
   }
 
-  function isIntersectionAhead(car) {
+  function crossingAhead(car) {
     if (!city || typeof city.isRoad !== 'function') return false;
     const ahead = car.pos + car.dir * 9;
     const px = car.axis === 'x' ? ahead : car.lane + 9;
@@ -277,7 +282,7 @@ export function createTraffic(city, random) {
       car.playerZ = playerZ;
       let want = car.disabled ? 0 : car.targetSpeed;
       if (!car.disabled) {
-        // Car ahead in the same lane: match its speed or stop.
+        // Car ahead in the same lane: match its speed, or stop if close.
         for (const other of cars) {
           if (other === car || other.axis !== car.axis || other.dir !== car.dir) continue;
           if (Math.abs(other.lane - car.lane) > 1.5) continue;
@@ -293,11 +298,11 @@ export function createTraffic(city, random) {
             if (gap > 0 && gap < 12) want = Math.min(want, gap < 5 ? 0 : 3);
           }
         }
-        // Sometimes yield at an intersection.
+        // Sometimes pause at an intersection.
         if (car.stopTimer > 0) {
           car.stopTimer -= dt;
           want = 0;
-        } else if (isIntersectionAhead(car) && random() < 0.004) {
+        } else if (crossingAhead(car) && random() < 0.004) {
           car.stopTimer = 0.8 + random() * 2.2;
           want = 0;
         }
@@ -350,7 +355,7 @@ export function createTraffic(city, random) {
 /**
  * Cars parked at the kerb that the player can take. A car:
  * { mesh, kind, model, color, x, z, angle, speed, parked, occupied,
- *   health, disabled }. occupied cars have a driver who flees when stolen.
+ *   health, disabled }. Occupied cars have a driver who flees when stolen.
  */
 export function spawnParkedCars(city, random, count = PARKED_COUNT) {
   const parked = [];
@@ -378,13 +383,12 @@ export function spawnParkedCars(city, random, count = PARKED_COUNT) {
       health: 100, disabled: false,
     });
   }
-  // Rook's starter car: one guaranteed parked car on the kerb just SOUTH of
+  // The starter car: one guaranteed parked car on the kerb just SOUTH of
   // the player's spawn, so the first mission ("Get in a car") is always
-  // completable without hunting the whole city for a parked car. South is
-  // the way the player spawns facing (angle 0), so W walks straight at it
-  // and its beacon is visible from the spawn. The kerb offset matches the
-  // generator's own (road/2 + 1.6), so it sits on the same clear strip as
-  // every other parked car.
+  // completable without hunting the whole city. South is the way the
+  // player spawns facing (angle 0), so W walks straight at it. The kerb
+  // offset matches the generator's own (road/2 + 1.6), so it sits on the
+  // same clear strip as every other parked car.
   {
     const color = 0xe8b13d;
     const mesh = buildCarModel(color, 'sedan');
@@ -435,7 +439,8 @@ export function playerCarPhysics(car, input, dt, cityArg) {
   if (car.disabled) car.speed = approach(car.speed, 0, 10 * dt);
 
   const speed01 = Math.min(Math.abs(car.speed) / Math.max(1, maxSpeed), 1);
-  const turnRate = steer * (CAR.turnRate - speed01 * 0.9) * (handbrake ? CAR.handbrakeTurn / CAR.turnRate : 1);
+  const turnBoost = handbrake ? CAR.handbrakeTurn / CAR.turnRate : 1;
+  const turnRate = steer * (CAR.turnRate - speed01 * 0.9) * turnBoost;
   const moving = Math.min(Math.abs(car.speed) / 6, 1);
   car.angle += turnRate * moving * (car.speed < 0 ? -1 : 1) * dt;
   if (handbrake && Math.abs(car.speed) > 3) car.speed *= (1 - 0.3 * dt);

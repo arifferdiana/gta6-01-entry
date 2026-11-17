@@ -1,24 +1,28 @@
-// All sound is synthesized with WebAudio — no audio files, no network.
-// The context is created only on the first user gesture (init), and every method is a
-// safe no-op until then, so the world can call audio freely from boot.
+// SOLMARINA — sound, all synthesized with WebAudio.
+//
+// No audio files, no network. The AudioContext is created only on the
+// first user gesture (init), and every method is a safe no-op until then,
+// so the world can call audio freely from boot. Music is a light looping
+// chord pad, the engine is a speed-following oscillator pair, and the
+// siren is a two-tone loop while the player is wanted.
 
 export function createAudio() {
   let ctx = null;
   let master = null;
-  let musicGain = null;
+  let musicBus = null;
   let engineOsc = null;
   let engineOsc2 = null;
   let engineGain = null;
   let engineFilter = null;
-  let sirenTimer = null;
   let sirenOsc = null;
   let sirenGain = null;
+  let sirenTimer = null;
   let sirenHigh = false;
   let musicTimer = null;
-  let muted = false;
   let musicOn = false;
-  let noiseBuffer = null;
   let musicStep = 0;
+  let muted = false;
+  let noiseBuffer = null;
 
   function ensureNoise() {
     if (noiseBuffer) return noiseBuffer;
@@ -41,7 +45,8 @@ export function createAudio() {
     master.gain.value = muted ? 0 : 0.5;
     master.connect(ctx.destination);
 
-    // Engine hum: two detuned saws through a lowpass; setEngine() bends the pitch.
+    // Engine hum: two detuned saws through a lowpass; setEngine() bends
+    // the pitch and the filter with speed.
     engineOsc = ctx.createOscillator();
     engineOsc.type = 'sawtooth';
     engineOsc.frequency.value = 55;
@@ -60,7 +65,7 @@ export function createAudio() {
     engineOsc.start();
     engineOsc2.start();
 
-    // Two-tone siren, flipped by a timer while it runs.
+    // Two-tone siren, flipped between 700 and 950 Hz by a timer.
     sirenOsc = ctx.createOscillator();
     sirenOsc.type = 'square';
     sirenOsc.frequency.value = 700;
@@ -70,9 +75,9 @@ export function createAudio() {
     sirenGain.connect(master);
     sirenOsc.start();
 
-    musicGain = ctx.createGain();
-    musicGain.gain.value = 0.14;
-    musicGain.connect(master);
+    musicBus = ctx.createGain();
+    musicBus.gain.value = 0.14;
+    musicBus.connect(master);
   }
 
   function setMuted(m) {
@@ -89,8 +94,9 @@ export function createAudio() {
     if (!ctx || !engineOsc) return;
     const ratio = Math.max(0, Math.min(1, speed / Math.max(1, maxSpeed || 40)));
     const now = ctx.currentTime;
-    engineOsc.frequency.setTargetAtTime(48 + ratio * 150, now, 0.08);
-    engineOsc2.frequency.setTargetAtTime((48 + ratio * 150) * 1.01, now, 0.08);
+    const freq = 48 + ratio * 150;
+    engineOsc.frequency.setTargetAtTime(freq, now, 0.08);
+    engineOsc2.frequency.setTargetAtTime(freq * 1.01, now, 0.08);
     engineGain.gain.setTargetAtTime(speed > 0.5 ? 0.05 + ratio * 0.05 : 0, now, 0.1);
     engineFilter.frequency.setTargetAtTime(350 + ratio * 900, now, 0.1);
   }
@@ -110,6 +116,7 @@ export function createAudio() {
     }
   }
 
+  // One short oscillator note with an exponential decay.
   function blip(frequency, duration, type, volume, slideTo) {
     if (!ctx) return;
     const now = ctx.currentTime;
@@ -126,6 +133,7 @@ export function createAudio() {
     osc.stop(now + duration + 0.02);
   }
 
+  // A burst of filtered noise (gunshots, punches).
   function noiseBurst(duration, volume, filterFreq) {
     if (!ctx) return;
     const now = ctx.currentTime;
@@ -191,8 +199,9 @@ export function createAudio() {
     stinger([330, 262, 196, 131], 'sawtooth');
   }
 
-  // Ambient music: a slow chord pad (Am – F – C – G) with a soft bass pulse.
-  // Chords are [root, third, fifth] in Hz; each step holds one chord for a bar.
+  // Ambient music: a slow chord pad (Am – F – C – G) with a soft bass
+  // pulse. Chords are [root, third, fifth, octave] in Hz; each step holds
+  // one chord for a bar.
   const CHORDS = [
     [110.0, 220.0, 261.6, 329.6],
     [87.3, 174.6, 220.0, 261.6],
@@ -202,8 +211,9 @@ export function createAudio() {
   const BAR_MS = 2400;
 
   function playChord(notes) {
-    if (!ctx || !musicGain) return;
+    if (!ctx || !musicBus) return;
     const now = ctx.currentTime;
+    const barSeconds = BAR_MS / 1000;
     for (const freq of notes) {
       const osc = ctx.createOscillator();
       osc.type = 'triangle';
@@ -212,12 +222,12 @@ export function createAudio() {
       const gain = ctx.createGain();
       gain.gain.setValueAtTime(0, now);
       gain.gain.linearRampToValueAtTime(0.16, now + 0.5);
-      gain.gain.setValueAtTime(0.16, now + BAR_MS / 1000 - 0.6);
-      gain.gain.linearRampToValueAtTime(0, now + BAR_MS / 1000);
+      gain.gain.setValueAtTime(0.16, now + barSeconds - 0.6);
+      gain.gain.linearRampToValueAtTime(0, now + barSeconds);
       osc.connect(gain);
-      gain.connect(musicGain);
+      gain.connect(musicBus);
       osc.start(now);
-      osc.stop(now + BAR_MS / 1000 + 0.05);
+      osc.stop(now + barSeconds + 0.05);
     }
     // Soft bass pulse on the root, twice a bar.
     for (let beat = 0; beat < 2; beat += 1) {
@@ -230,7 +240,7 @@ export function createAudio() {
       gain.gain.linearRampToValueAtTime(0.5, start + 0.05);
       gain.gain.exponentialRampToValueAtTime(0.001, start + 0.5);
       osc.connect(gain);
-      gain.connect(musicGain);
+      gain.connect(musicBus);
       osc.start(start);
       osc.stop(start + 0.55);
     }

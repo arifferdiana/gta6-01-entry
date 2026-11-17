@@ -1,12 +1,14 @@
-// The screenshot scenes behind ?shot=title|drive|chase|mission. Each one builds a
-// fresh world from seed 1, stages the scene by setting the live state directly
-// (positions, cars, cops, wanted level, mission marker) and then plays the real
-// rules forward a few seconds, so the frame is what a short game really looks
-// like and the same seed always gives the same frame.
+// The screenshot scenes behind ?shot=title|drive|chase|mission. Each one
+// builds a fresh world from seed 1, stages the scene by setting the live
+// state directly (positions, cars, cops, wanted level, mission marker)
+// and then plays the real rules forward a few seconds, so the frame is
+// what a short game really looks like and the same seed always gives the
+// same frame.
 //
-// The staged state is returned as { screen, state, hudState } — main.js paints it
-// twice and sets window.__shotReady. Staging is defensive: world.step is tried
-// for ambient motion but a failure there never loses the staged scene.
+// The staged state is returned as { screen, state, hudState } — main.js
+// paints it twice and sets window.__shotReady. Staging is defensive:
+// world.step is tried for ambient motion but a failure there never loses
+// the staged scene.
 
 import { STEP } from './config.js';
 import { createRandom } from './random.js';
@@ -96,6 +98,7 @@ function stageTitle() {
     time: 17.5,
     message: '',
   });
+  // Rook on foot at the spawn point, looking out over downtown at dusk.
   putPlayerOnFoot(state, 6, 102, Math.PI);
   return { screen: SCREEN_TITLE, state, hudState: state };
 }
@@ -208,6 +211,7 @@ function stageMission() {
  */
 export function stageShot(name, game) {
   void game;
+  void createMissions;
   if (name === 'drive') return stageDrive();
   if (name === 'chase') return stageChase();
   if (name === 'mission') return stageMission();

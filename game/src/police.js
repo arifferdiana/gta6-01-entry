@@ -67,7 +67,7 @@ function call(audio, name, ...args) {
  *
  * policeCars: plain car objects { mesh, kind:'police', model:'police',
  *   color, x, z, angle, speed, mode:'chase'|'block'|'leave',
- *   health, disabled }.
+ *   health, disabled, parked, occupied }.
  */
 export function createPolice(city, random, audio) {
   const state = { stars: 0, heat: 0, bustTimer: 0, pinTimer: 0, unseenTimer: 0 };
@@ -173,12 +173,12 @@ export function createPolice(city, random, audio) {
       block += 1;
     }
     // Too many: send the farthest ones away instead of deleting them.
-    const extra = policeCars.filter((c) => c.mode !== 'leave');
+    const active = policeCars.filter((c) => c.mode !== 'leave');
     const keep = wantChase + wantBlock;
-    if (extra.length > keep) {
-      extra.sort((a, b) =>
+    if (active.length > keep) {
+      active.sort((a, b) =>
         Math.hypot(b.x - player.x, b.z - player.z) - Math.hypot(a.x - player.x, a.z - player.z));
-      for (let i = keep; i < extra.length; i += 1) extra[i].mode = 'leave';
+      for (let i = keep; i < active.length; i += 1) active[i].mode = 'leave';
     }
     if (wantBlock > 0) {
       roadblockTimer -= dt;
@@ -191,14 +191,14 @@ export function createPolice(city, random, audio) {
 
   /**
    * One step. player: { x, z, angle, speed, onFoot, car }.
-   * ctx: { copTouching (a foot cop is holding the player),
+   * info: { copTouching (a foot cop is holding the player),
    *   nearestCopDist }. The wanted level itself is owned here and mirrored
    * to the world by the caller — missions force it by writing the world's
    * state.wanted, which the world adopts via setWanted before calling this.
    * Returns { busted: null | 'arrest' | 'pinned', rammed: bool,
    *   nearestDist }.
    */
-  function update(dt, player, ctx) {
+  function update(dt, player, info) {
     const events = { busted: null, rammed: false, nearestDist: Infinity };
 
     if (state.stars > 0) {
@@ -276,7 +276,7 @@ export function createPolice(city, random, audio) {
     }
 
     // Arrest bust: a foot cop holding the on-foot player for 1.5 s.
-    if (ctx && ctx.copTouching && player.onFoot) {
+    if (info && info.copTouching && player.onFoot) {
       state.bustTimer += dt;
     } else {
       state.bustTimer = Math.max(0, state.bustTimer - dt * 2);
@@ -287,8 +287,8 @@ export function createPolice(city, random, audio) {
     }
 
     // Decay: out of every cop's sight for POLICE.decaySeconds loses a star.
-    const nearestCop = ctx && typeof ctx.nearestCopDist === 'number'
-      ? Math.min(events.nearestDist, ctx.nearestCopDist)
+    const nearestCop = info && typeof info.nearestCopDist === 'number'
+      ? Math.min(events.nearestDist, info.nearestCopDist)
       : events.nearestDist;
     if (state.stars > 0) {
       if (nearestCop > 45) state.unseenTimer += dt;
