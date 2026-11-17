@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SOLMARINA — an original open-world crime game</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #10131a; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+  #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+  /* --- HUD built by src/hud.js (classes .sm-*) --- */
+  .sm-hud { position: fixed; inset: 0; pointer-events: none; color: #f2f4f6; z-index: 5; }
+  .sm-hud button { pointer-events: auto; }
+  .sm-topleft { position: absolute; top: 14px; left: 16px; display: flex; flex-direction: column; gap: 4px; }
+  .sm-stars { font-size: 26px; letter-spacing: 4px; color: #ffd23f; text-shadow: 0 2px 6px rgba(0,0,0,.8); }
+  .sm-stars.sm-wanted { animation: sm-pulse 0.9s infinite alternate; }
+  @keyframes sm-pulse { from { opacity: 1; } to { opacity: 0.55; } }
+  .sm-cash { font-size: 24px; font-weight: 700; color: #7ee081; text-shadow: 0 2px 6px rgba(0,0,0,.8); }
+  .sm-clock { position: absolute; top: 14px; right: 16px; font-size: 20px; font-weight: 600; text-shadow: 0 2px 6px rgba(0,0,0,.8); }
+  .sm-toasts { position: absolute; top: 18%; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; align-items: center; }
+  .sm-toast { background: rgba(10, 12, 18, 0.82); border: 1px solid rgba(255,255,255,.18); border-radius: 8px; padding: 10px 16px; font-size: 17px; max-width: 560px; text-align: center; }
+  .sm-toast-fade { opacity: 0; transition: opacity 0.6s; }
+  .sm-objective { position: absolute; top: 64px; left: 50%; transform: translateX(-50%); display: flex; gap: 10px; align-items: baseline; background: rgba(10, 12, 18, 0.72); border-radius: 8px; padding: 8px 14px; font-size: 16px; }
+  .sm-objective-text { color: #ffd23f; font-weight: 600; }
+  .sm-objective-dist { color: #dfe6ec; }
+  .sm-bottomleft { position: absolute; left: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .sm-health-wrap { display: flex; align-items: center; gap: 8px; }
+  .sm-health-label { font-size: 12px; font-weight: 700; letter-spacing: 2px; text-shadow: 0 1px 4px rgba(0,0,0,.8); }
+  .sm-health-bar { width: 200px; height: 14px; background: rgba(0,0,0,.55); border: 1px solid rgba(255,255,255,.35); border-radius: 7px; overflow: hidden; }
+  .sm-health-fill { height: 100%; width: 100%; background: #58c96b; }
+  .sm-health-fill.sm-health-low { background: #e5534b; }
+  .sm-minimap { width: 220px; height: 220px; border: 2px solid rgba(255,255,255,.75); border-radius: 8px; background: #22406b; box-shadow: 0 4px 18px rgba(0,0,0,.5); }
+  .sm-bottomright { position: absolute; right: 16px; bottom: 16px; text-align: right; }
+  .sm-speed { font-size: 28px; font-weight: 700; text-shadow: 0 2px 6px rgba(0,0,0,.8); }
+  .sm-ammo { font-size: 18px; font-weight: 600; color: #ffd23f; text-shadow: 0 2px 6px rgba(0,0,0,.8); }
+  .sm-screen { position: absolute; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: rgba(8, 10, 16, 0.72); text-align: center; padding: 20px; }
+  .sm-title { font-size: 84px; margin: 0; letter-spacing: 10px; color: #ffd23f; text-shadow: 0 4px 0 #b3541e, 0 8px 28px rgba(0,0,0,.7); }
+  .sm-tagline { font-size: 20px; color: #dfe6ec; margin: 0 0 10px; }
+  .sm-heading { font-size: 44px; margin: 0; color: #ffd23f; }
+  .sm-btn { pointer-events: auto; cursor: pointer; font-size: 18px; font-weight: 600; color: #10131a; background: #ffd23f; border: none; border-radius: 8px; padding: 12px 28px; min-width: 240px; }
+  .sm-btn:hover { background: #ffe27a; }
+  .sm-footnote { color: #9aa7b4; font-size: 14px; }
+  .sm-howlist { text-align: left; font-size: 17px; line-height: 1.9; color: #eef1f5; }
+  .sm-gameover-text { font-size: 18px; color: #dfe6ec; }
+  .hidden { display: none !important; }
+  /* On menu screens (title / how-to / pause / game over) the gameplay HUD
+     chrome hides and only the menu panel shows. */
+  .sm-hud.sm-in-menu .sm-topleft,
+  .sm-hud.sm-in-menu .sm-clock,
+  .sm-hud.sm-in-menu .sm-toasts,
+  .sm-hud.sm-in-menu .sm-objective,
+  .sm-hud.sm-in-menu .sm-bottomleft,
+  .sm-hud.sm-in-menu .sm-bottomright { display: none; }
+</style>
+<script type="importmap">
+{"imports": {"three": "./vendor/three.module.min.js"}}
+</script>
+</head>
+<body>
+<canvas id="game" aria-label="SOLMARINA: an original open-world crime game. Drive, earn, survive."></canvas>
+<p id="status" role="status" aria-live="polite"></p>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
