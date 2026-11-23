@@ -336,6 +336,17 @@ export function createCity(random) {
     }
   }
 
+  // A small beacon tower on the pier-end platform: a landmark the mission
+  // marker can sit beside, visible from the beach and the city.
+  const beaconMat = new THREE.MeshLambertMaterial({ color: '#e8e4d8' });
+  const beaconLightMat = new THREE.MeshBasicMaterial({ color: 0xffd94d });
+  const beacon = new THREE.Mesh(new THREE.CylinderGeometry(1.0, 1.4, 9, 8), beaconMat);
+  beacon.position.set(-HALF - 128, 5.1, 48);
+  group.add(beacon);
+  const beaconLight = new THREE.Mesh(new THREE.SphereGeometry(0.9, 10, 8), beaconLightMat);
+  beaconLight.position.set(-HALF - 128, 10.2, 48);
+  group.add(beaconLight);
+
   // --- Marina: docks and moored boats along the south edge ------------------
   const dockMat = new THREE.MeshLambertMaterial({ color: '#9a7b4f' });
   const hullMat = new THREE.MeshLambertMaterial({ color: '#f2f2f2' });

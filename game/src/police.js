@@ -15,6 +15,11 @@
 import { POLICE, WANTED_MAX } from './config.js';
 import { buildCarModel } from './vehicles.js';
 
+/** Seconds a police car must pin the player's car still before the bust. */
+const PIN_BUST_SECONDS = 3;
+/** Seconds a foot cop must hold the on-foot player before the arrest bust. */
+const ARREST_BUST_SECONDS = 1.5;
+
 function clamp(v, a, b) {
   return v < a ? a : v > b ? b : v;
 }
@@ -264,24 +269,24 @@ export function createPolice(city, random, audio) {
       }
     }
 
-    // Pin bust: a police car holding the player's car still for 3 s.
+    // Pin bust: a police car holding the player's car still for PIN_BUST_SECONDS.
     const pinning = policeCars.some((c) => c.mode !== 'leave')
       && !player.onFoot
       && events.nearestDist < 4
       && Math.abs(player.speed || 0) < 1.5;
     if (!pinning) state.pinTimer = Math.max(0, state.pinTimer - dt);
-    if (state.pinTimer >= 3) {
+    if (state.pinTimer >= PIN_BUST_SECONDS) {
       events.busted = 'pinned';
       state.pinTimer = 0;
     }
 
-    // Arrest bust: a foot cop holding the on-foot player for 1.5 s.
+    // Arrest bust: a foot cop holding the on-foot player for ARREST_BUST_SECONDS.
     if (info && info.copTouching && player.onFoot) {
       state.bustTimer += dt;
     } else {
       state.bustTimer = Math.max(0, state.bustTimer - dt * 2);
     }
-    if (state.bustTimer >= 1.5) {
+    if (state.bustTimer >= ARREST_BUST_SECONDS) {
       events.busted = 'arrest';
       state.bustTimer = 0;
     }

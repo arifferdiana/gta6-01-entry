@@ -11,3 +11,13 @@ export function createRandom(seed) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+
+/** A float in [min, max) from a mulberry32 stream. */
+export function range(random, min, max) {
+  return min + random() * (max - min);
+}
+
+/** One element of an array, picked by a mulberry32 stream. */
+export function pick(random, arr) {
+  return arr[Math.floor(random() * arr.length)];
+}

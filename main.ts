@@ -19,7 +19,7 @@
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
 
-import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
@@ -31,6 +31,13 @@ mkdirSync(out, { recursive: true });
 cpSync(join(here, 'game'), join(out, 'game'), { recursive: true });
 mkdirSync(join(out, 'screenshots'), { recursive: true });
 if (existsSync(join(here, 'screenshots'))) cpSync(join(here, 'screenshots'), join(out, 'screenshots'), { recursive: true });
+
+// How many screenshots are being handed in (the first by name is the cover).
+const shotNames = existsSync(join(here, 'screenshots'))
+  ? readdirSync(join(here, 'screenshots')).filter((f) => /\.(png|jpe?g)$/i.test(f)).sort()
+  : [];
+if (shotNames.length === 0) console.warn('SOLMARINA: no screenshots in screenshots/ — the judge sees no cover.');
+if (shotNames.length > 4) console.warn(`SOLMARINA: ${shotNames.length} screenshots — the scorer caps at 4, extras will be refused.`);
 
 // The scorer's own caps (reference/gate.json): only text_max_bytes shapes
 // the bytes; the others refuse an entry the scorer would refuse (more than
@@ -50,4 +57,4 @@ writeFileSync(
 
 // SOLMARINA line, authored for this entry: the debt is $50,000, and every
 // fare, package and score in game/src/missions.js pays it down.
-console.log(`SOLMARINA packaged into ${out}`);
+console.log(`SOLMARINA packaged into ${out} (${shotNames.length} screenshots)`);

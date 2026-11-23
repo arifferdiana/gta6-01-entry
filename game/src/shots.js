@@ -153,15 +153,19 @@ function stageChase() {
   // Rook fleeing north in the red sports car; two PD cruisers pulling up
   // ALONGSIDE him (one ahead-left, one behind-right) so both are inside
   // the chase camera's view — cruisers staged directly behind the player
-  // sit behind the camera and never show. A foot cop runs ahead.
+  // sit behind the camera and never show. A foot cop runs ahead, and a
+  // third cruiser sits across the road further north, the start of a
+  // roadblock, so the frame shows the pursuit and the response at once.
   const car = { x: 0, z: 60, angle: Math.PI, color: 0xc0392b, model: 'sport', speed: 32 };
   state.cars.push(car);
   const copCar1 = { x: -6, z: 52, angle: Math.PI, color: 0x1a2436, model: 'police', speed: 30 };
   const copCar2 = { x: 4, z: 64, angle: Math.PI, color: 0x1a2436, model: 'police', speed: 30 };
-  state.cars.push(copCar1, copCar2);
+  const copCar3 = { x: -8, z: 18, angle: Math.PI / 2, color: 0x1a2436, model: 'police', speed: 0 };
+  state.cars.push(copCar1, copCar2, copCar3);
   state.cops.push(
     { x: copCar1.x, z: copCar1.z, angle: Math.PI, onFoot: false, car: copCar1 },
     { x: copCar2.x, z: copCar2.z, angle: Math.PI, onFoot: false, car: copCar2 },
+    { x: copCar3.x, z: copCar3.z, angle: Math.PI / 2, onFoot: false, car: copCar3 },
     { x: 10, z: 18, angle: Math.PI, onFoot: true, speed: 6 },
   );
   state.peds.push(

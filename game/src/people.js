@@ -11,7 +11,10 @@
 import * as THREE from 'three';
 import { PALETTE, TRAFFIC } from './config.js';
 
-export const PED_COUNT = TRAFFIC.peds || 26;
+export const PED_COUNT = TRAFFIC.peds || 28;
+
+/** How fast a fleeing pedestrian runs. */
+const FLEE_SPEED = 5.2;
 
 const SHIRT_COLORS = [0x4a90d9, 0x7bc47f, 0xe8b13d, 0xd97b9c, 0x8a6fc0, 0x5bc0be, 0xe07a3f, 0x9db38a];
 const SKIN_TONES = [0xd9a077, 0xc98d5f, 0x8a5a3b, 0xf0c8a0];
@@ -209,10 +212,10 @@ export function createPedestrians(city, random) {
         const d = Math.hypot(dx, dz) || 1;
         ped.angle = Math.atan2(dx / d, dz / d);
         const moved = moveWithCollision(city, ped.x, ped.z,
-          (dx / d) * 5.2 * dt, (dz / d) * 5.2 * dt, 0.5);
+          (dx / d) * FLEE_SPEED * dt, (dz / d) * FLEE_SPEED * dt, 0.5);
         ped.x = moved.x;
         ped.z = moved.z;
-        ped.speed = 5.2;
+        ped.speed = FLEE_SPEED;
         if (ped.fleeTimer <= 0) {
           ped.state = 'walk';
           ped.target = pickTarget();

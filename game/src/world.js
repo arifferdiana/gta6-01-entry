@@ -380,6 +380,10 @@ export function createWorld(random, city, audio) {
 
   function nearestParkedCar(maxDist) {
     const p = state.player;
+    // The vehicles module owns the parked-car search now.
+    if (vehicles && typeof vehicles.nearestParked === 'function') {
+      return vehicles.nearestParked(p.x, p.z, maxDist);
+    }
     let best = null;
     let bestD = maxDist;
     for (const car of vehicles.parkedCars) {
@@ -634,6 +638,7 @@ export function createWorld(random, city, audio) {
       if (res.crashed && Math.abs(speedBefore) > 12) {
         damagePlayer(6, 'crash');
         car.health -= 8;
+        call(audio, 'crash');
         if (car.health <= 0) car.disabled = true;
       }
       call(audio, 'setEngine', Math.abs(car.speed), CAR.maxSpeed);

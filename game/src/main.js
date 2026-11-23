@@ -175,6 +175,9 @@ function runGame() {
     world.reset();
     if (fromSave && savedSnapshot) applySave(savedSnapshot);
     lastMissionsDone = (world.state.missionsDone || []).length;
+    // Fresh episode: forget the last objective line, so the first mission's
+    // message toasts again instead of being swallowed as a repeat.
+    lastMessage = '';
     if (!missions.active && typeof missions.startNext === 'function') missions.startNext();
     accumulator = 0;
     autosaveTimer = 0;

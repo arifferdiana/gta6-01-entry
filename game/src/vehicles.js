@@ -527,6 +527,19 @@ export function createVehicles(city, random, audio) {
     buildCarModel,
     playerCarPhysics: (car, input, dt) => playerCarPhysics(car, input, dt, city),
     spawnParkedCars: (n) => spawnParkedCars(city, random, n),
+    /** Nearest parked car to (x, z) within maxDist, or null. */
+    nearestParked(x, z, maxDist) {
+      let best = null;
+      let bestD = maxDist;
+      for (const car of parkedCars) {
+        const d = Math.hypot(car.x - x, car.z - z);
+        if (d < bestD) {
+          bestD = d;
+          best = car;
+        }
+      }
+      return best;
+    },
     update(dt, playerCar, playerX, playerZ) {
       traffic.update(dt, playerCar, playerX, playerZ);
     },

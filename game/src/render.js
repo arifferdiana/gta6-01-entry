@@ -311,9 +311,16 @@ export function createRenderer(canvas, city) {
 
   /** Paint one frame of the live state under the current screen. */
   function draw(state, screen) {
-    clock += 1 / 60;
     const now = performance.now();
-    if (lastFrameAt > 0) adaptiveQuality(now - lastFrameAt);
+    // Advance the animation clock by real elapsed time (capped), so walk
+    // cycles, the beacon spin and the police flash run at the same speed
+    // on a 30 fps machine as on a 60 fps one.
+    if (lastFrameAt > 0) {
+      clock += Math.min(0.1, (now - lastFrameAt) / 1000);
+      adaptiveQuality(now - lastFrameAt);
+    } else {
+      clock += 1 / 60;
+    }
     lastFrameAt = now;
 
     const s = state || {};

@@ -155,6 +155,7 @@ export function createHud(document) {
   titleScreen.appendChild(btnContinue);
   titleScreen.appendChild(btnHow);
   titleScreen.appendChild(el(document, 'p', 'sm-footnote', 'An original open-world crime game. Drive, earn, survive.'));
+  titleScreen.appendChild(el(document, 'p', 'sm-footnote', 'WASD drive · F enter car · E interact · Space handbrake · P pause · M mute'));
 
   // How to play (shown over the title screen).
   const howScreen = makeScreen('howto');

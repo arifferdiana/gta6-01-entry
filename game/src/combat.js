@@ -14,6 +14,7 @@
 
 import * as THREE from 'three';
 import { COMBAT, PLAYER } from './config.js';
+import { createRandom } from './random.js';
 
 export const WEAPONS = {
   fists: {
@@ -29,16 +30,8 @@ export const WEAPONS = {
 
 const PICKUP_RESPAWN = 60;
 
-/** Tiny seeded RNG (mulberry32) used only when no random() is passed in. */
-function fallbackRandom(seed) {
-  let a = seed | 0;
-  return function random() {
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
+/** Tiny seeded RNG (mulberry32) from the shared random module, used only when no random() is passed in. */
+const fallbackRandom = createRandom;
 
 function call(audio, name, ...args) {
   if (audio && typeof audio[name] === 'function') audio[name](...args);

@@ -22,6 +22,7 @@ export function saveGame(snapshot) {
       z: Number(snapshot.z) || 0,
       time: Number(snapshot.time) || 0,
       health: Math.max(0, Math.min(100, Number(snapshot.health) || 100)),
+      savedAt: Date.now(),
     };
     window.localStorage.setItem(SAVE_KEY, JSON.stringify(clean));
     return true;
@@ -43,6 +44,7 @@ export function loadGame() {
       z: Number(data.z) || 0,
       time: Number(data.time) || 0,
       health: Math.max(0, Math.min(100, Number(data.health) || 100)),
+      savedAt: Number(data.savedAt) || 0,
     };
   } catch {
     return null;

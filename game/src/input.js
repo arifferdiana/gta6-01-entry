@@ -140,6 +140,13 @@ export function createInput(canvas) {
     running() {
       return hasAny(RUN);
     },
+    /** Drop every held key and queued action: call when pausing or changing scenes. */
+    clear() {
+      held.clear();
+      actions = 0;
+      shootHeld = false;
+      dragging = false;
+    },
     /** The one-shot presses since the last call, as ACTION_* flags. */
     takeActions() {
       const taken = actions;

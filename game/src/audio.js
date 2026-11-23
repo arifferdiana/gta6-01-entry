@@ -163,6 +163,12 @@ export function createAudio() {
     blip(110, 0.12, 'sine', 0.3, 45);
   }
 
+  /** A car crash: a low thud of noise plus a falling saw. */
+  function crash() {
+    noiseBurst(0.25, 0.5, 900);
+    blip(90, 0.25, 'sawtooth', 0.25, 40);
+  }
+
   function pickup() {
     blip(660, 0.09, 'sine', 0.2);
     window.setTimeout(() => blip(990, 0.14, 'sine', 0.2), 80);
@@ -274,7 +280,7 @@ export function createAudio() {
 
   return {
     init, setMuted, isMuted, setEngine, setSiren,
-    gunshot, punch, pickup, click, horn,
+    gunshot, punch, crash, pickup, click, horn,
     missionComplete, busted, wasted,
     startMusic, stopMusic, toggleMusic,
   };

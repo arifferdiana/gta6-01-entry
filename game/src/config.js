@@ -56,10 +56,11 @@ export const CAR = {
   coastTime: 1.2,
 };
 
-/** Traffic and pedestrians. */
+/** Traffic and pedestrians: a few more of each than the first draft, so the streets
+ *  read as busy in the screenshots without changing the frame budget. */
 export const TRAFFIC = {
-  cars: 14,
-  peds: 26,
+  cars: 16,
+  peds: 28,
   cruiseSpeed: 9,
   pedSpeed: 1.6,
   spawnRadius: 220,

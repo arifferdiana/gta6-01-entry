@@ -483,7 +483,9 @@ export function createMissions(world) {
             taxi = null;
             state.missionId = active ? active.def.id : null;
             state.markers = [];
-            state.message = '';
+            // Keep the fare-complete line up: the HUD shows it until the
+            // next objective replaces it (it used to be cleared here, so
+            // the player never saw the payout).
           }
         }
       }
