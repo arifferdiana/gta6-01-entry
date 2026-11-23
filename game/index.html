@@ -1,67 +1,87 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="SOLMARINA — an original open-world crime game: drive, earn and survive in a sun-soaked coastal city.">
-<title>SOLMARINA — an original open-world crime game</title>
-<link rel="icon" href="data:,">
+<title>SOLMARINA — an open-world crime game</title>
 <style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #10131a; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
-  #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
-  #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-
-  /* --- HUD built by src/hud.js (classes .sm-*) --- */
-  .sm-hud { position: fixed; inset: 0; pointer-events: none; color: #f2f4f6; z-index: 5; }
-  .sm-hud button { pointer-events: auto; }
-  .sm-topleft { position: absolute; top: 14px; left: 16px; display: flex; flex-direction: column; gap: 4px; }
-  .sm-stars { font-size: 26px; letter-spacing: 4px; color: #ffd23f; text-shadow: 0 2px 6px rgba(0,0,0,.8); }
-  .sm-stars.sm-wanted { animation: sm-pulse 0.9s infinite alternate; }
-  @keyframes sm-pulse { from { opacity: 1; } to { opacity: 0.55; } }
-  .sm-cash { font-size: 24px; font-weight: 700; color: #7ee081; text-shadow: 0 2px 6px rgba(0,0,0,.8); }
-  .sm-clock { position: absolute; top: 14px; right: 16px; font-size: 20px; font-weight: 600; text-shadow: 0 2px 6px rgba(0,0,0,.8); }
-  .sm-toasts { position: absolute; top: 18%; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; align-items: center; }
-  .sm-toast { background: rgba(10, 12, 18, 0.82); border: 1px solid rgba(255,255,255,.18); border-radius: 8px; padding: 10px 16px; font-size: 17px; max-width: 560px; text-align: center; }
-  .sm-toast-fade { opacity: 0; transition: opacity 0.6s; }
-  .sm-objective { position: absolute; top: 64px; left: 50%; transform: translateX(-50%); display: flex; gap: 10px; align-items: baseline; background: rgba(10, 12, 18, 0.72); border-radius: 8px; padding: 8px 14px; font-size: 16px; }
-  .sm-objective-text { color: #ffd23f; font-weight: 600; }
-  .sm-objective-dist { color: #dfe6ec; }
-  .sm-bottomleft { position: absolute; left: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 10px; }
-  .sm-health-wrap { display: flex; align-items: center; gap: 8px; }
-  .sm-health-label { font-size: 12px; font-weight: 700; letter-spacing: 2px; text-shadow: 0 1px 4px rgba(0,0,0,.8); }
-  .sm-health-bar { width: 200px; height: 14px; background: rgba(0,0,0,.55); border: 1px solid rgba(255,255,255,.35); border-radius: 7px; overflow: hidden; }
-  .sm-health-fill { height: 100%; width: 100%; background: #58c96b; }
-  .sm-health-fill.sm-health-low { background: #e5534b; }
-  .sm-minimap { width: 220px; height: 220px; border: 2px solid rgba(255,255,255,.75); border-radius: 8px; background: #22406b; box-shadow: 0 4px 18px rgba(0,0,0,.5); }
-  .sm-bottomright { position: absolute; right: 16px; bottom: 16px; text-align: right; }
-  .sm-speed { font-size: 28px; font-weight: 700; text-shadow: 0 2px 6px rgba(0,0,0,.8); }
-  .sm-ammo { font-size: 18px; font-weight: 600; color: #ffd23f; text-shadow: 0 2px 6px rgba(0,0,0,.8); }
-  .sm-screen { position: absolute; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: rgba(8, 10, 16, 0.72); text-align: center; padding: 20px; }
-  .sm-title { font-size: 84px; margin: 0; letter-spacing: 10px; color: #ffd23f; text-shadow: 0 4px 0 #b3541e, 0 8px 28px rgba(0,0,0,.7); }
-  .sm-tagline { font-size: 20px; color: #dfe6ec; margin: 0 0 10px; }
-  .sm-heading { font-size: 44px; margin: 0; color: #ffd23f; }
-  .sm-btn { pointer-events: auto; cursor: pointer; font-size: 18px; font-weight: 600; color: #10131a; background: #ffd23f; border: none; border-radius: 8px; padding: 12px 28px; min-width: 240px; }
-  .sm-btn:hover { background: #ffe27a; }
-  .sm-footnote { color: #9aa7b4; font-size: 14px; }
-  .sm-howlist { text-align: left; font-size: 17px; line-height: 1.9; color: #eef1f5; }
-  .sm-gameover-text { font-size: 18px; color: #dfe6ec; }
-  .hidden { display: none !important; }
-  /* On menu screens (title / how-to / pause / game over) the gameplay HUD
-     chrome hides and only the menu panel shows. */
-  .sm-hud.sm-in-menu .sm-topleft,
-  .sm-hud.sm-in-menu .sm-clock,
-  .sm-hud.sm-in-menu .sm-toasts,
-  .sm-hud.sm-in-menu .sm-objective,
-  .sm-hud.sm-in-menu .sm-bottomleft,
-  .sm-hud.sm-in-menu .sm-bottomright { display: none; }
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #1a1626; font-family: 'Segoe UI', system-ui, sans-serif; }
+  #game-canvas { display: block; width: 100%; height: 100%; }
+  .chip { background: rgba(10, 10, 18, 0.62); border: 1px solid rgba(255, 255, 255, 0.22); border-radius: 8px; color: #fff; padding: 6px 10px; }
+  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
+  #hud-top { position: absolute; top: 12px; left: 12px; right: 12px; display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+  #money { font-size: 20px; font-weight: 700; color: #7dff8a; }
+  #health-wrap { display: flex; align-items: center; gap: 8px; }
+  #health-bar { width: 200px; height: 18px; background: rgba(0, 0, 0, 0.55); border: 1px solid rgba(255, 255, 255, 0.35); border-radius: 9px; overflow: hidden; }
+  #health-fill { height: 100%; width: 100%; background: #4caf50; transition: width 0.2s; }
+  #health-text { font-size: 13px; font-weight: 600; }
+  #stars { font-size: 26px; letter-spacing: 3px; text-align: center; }
+  #stars .star { color: rgba(255, 255, 255, 0.28); }
+  #stars .star.on { color: #ffd24d; text-shadow: 0 0 8px rgba(255, 210, 77, 0.8); }
+  #stars.hot .star.on { color: #ff5252; text-shadow: 0 0 8px rgba(255, 82, 82, 0.9); }
+  #objective { position: absolute; top: 64px; left: 50%; transform: translateX(-50%); max-width: 560px; text-align: center; font-size: 15px; line-height: 1.35; }
+  #minimap { position: absolute; left: 12px; bottom: 12px; width: 180px; height: 180px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.55); background: #14141e; }
+  #speed { position: absolute; right: 12px; bottom: 12px; font-size: 26px; font-weight: 800; }
+  #ammo { position: absolute; right: 12px; bottom: 64px; font-size: 17px; font-weight: 700; color: #ffe9a8; }
+  #toast { position: absolute; left: 50%; top: 38%; transform: translateX(-50%); font-size: 22px; font-weight: 700; color: #ffd24d; text-shadow: 0 2px 8px rgba(0, 0, 0, 0.8); opacity: 0; transition: opacity 0.3s; }
+  #toast.show { opacity: 1; }
+  .screen { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; color: #fff; background: linear-gradient(180deg, rgba(20, 12, 40, 0.55), rgba(10, 8, 20, 0.82)); z-index: 10; }
+  .screen h1 { font-size: 64px; letter-spacing: 10px; margin: 0 0 8px; color: #ffd24d; text-shadow: 0 4px 24px rgba(255, 150, 60, 0.65); }
+  .screen h2 { font-size: 18px; font-weight: 400; color: #ffd9a8; margin: 0 0 24px; }
+  .screen p { max-width: 560px; font-size: 15px; line-height: 1.6; color: #e8e4f0; margin: 0 0 18px; }
+  .screen .controls { font-size: 14px; line-height: 1.9; color: #c8c4d8; background: rgba(0, 0, 0, 0.45); border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 10px; padding: 12px 22px; margin-bottom: 26px; }
+  .screen .controls b { color: #ffd24d; }
+  .screen button { pointer-events: auto; font-size: 19px; font-weight: 700; color: #1a1420; background: #ffd24d; border: none; border-radius: 10px; padding: 13px 34px; margin: 4px; cursor: pointer; }
+  .screen button:hover { background: #ffdd7a; }
+  .screen button.ghost { background: transparent; color: #ffd24d; border: 2px solid #ffd24d; }
+  #death-screen { display: none; }
+  #death-screen h1 { color: #ff5252; text-shadow: 0 4px 24px rgba(255, 40, 40, 0.6); }
 </style>
 <script type="importmap">
-{"imports": {"three": "./vendor/three.module.min.js"}}
+{ "imports": { "three": "./vendor/three.module.min.js" } }
 </script>
 </head>
 <body>
-<canvas id="game" aria-label="SOLMARINA: an original open-world crime game. Drive, earn, survive."></canvas>
-<p id="status" role="status" aria-live="polite"></p>
+<canvas id="game-canvas"></canvas>
+
+<div id="hud">
+  <div id="hud-top">
+    <div id="health-wrap" class="chip">
+      <div id="health-bar"><div id="health-fill"></div></div>
+      <span id="health-text">100 HP</span>
+    </div>
+    <div id="stars" class="chip"><span class="star">★</span><span class="star">★</span><span class="star">★</span><span class="star">★</span><span class="star">★</span></div>
+    <div id="money" class="chip">$500</div>
+  </div>
+  <div id="objective" class="chip">Welcome to Solmarina.</div>
+  <canvas id="minimap" width="180" height="180"></canvas>
+  <div id="speed" class="chip" style="display:none">0 km/h</div>
+  <div id="ammo" class="chip" style="display:none">AMMO 24 / 120</div>
+  <div id="toast"></div>
+</div>
+
+<div id="start-screen" class="screen">
+  <h1>SOLMARINA</h1>
+  <h2>A city of your own. Take it.</h2>
+  <p>You are new in Solmarina, a sun-soaked coastal city run by the Reef Kings. Steal cars, outrun the police, run five missions from the warehouse to the beacon tower — and make the city yours.</p>
+  <div class="controls">
+    <b>WASD</b> walk / drive &nbsp;·&nbsp; <b>Mouse</b> look &nbsp;·&nbsp; <b>Click</b> shoot<br>
+    <b>E</b> enter / exit car &nbsp;·&nbsp; <b>Space</b> brake &nbsp;·&nbsp; <b>Shift</b> run<br>
+    <b>R</b> reload &nbsp;·&nbsp; <b>M</b> mute &nbsp;·&nbsp; progress saves automatically
+  </div>
+  <div>
+    <button id="start-btn">Start the engine</button>
+    <button id="new-game-btn" class="ghost" style="display:none">New game</button>
+  </div>
+</div>
+
+<div id="death-screen" class="screen">
+  <h1>WASTED</h1>
+  <h2>The Reef Kings got you — this time.</h2>
+  <p>You woke up at St. Marina Hospital, lighter by a tenth of your money. Solmarina is still out there.</p>
+  <button id="respawn-btn">Get back out there</button>
+</div>
+
 <script type="module" src="./src/main.js"></script>
 </body>
 </html>

@@ -1,754 +1,268 @@
-// SOLMARINA — world: the simulation glue.
-// Original code for this game. No Rockstar / GTA names, art or assets.
-//
-// Owns the player, the clock, crime, death / bust, pickups and the mission
-// hooks, and steps the four subsystems (vehicles, people, police, combat)
-// every fixed step. It draws nothing: render.js paints state, hud.js reads
-// state, missions.js reads state and drives the story.
-//
-// Contracts it honours (read from the real modules, not assumed):
-//   config.js  PLAYER / CAR / HEAT / WANTED_MAX / PALETTE.
-//   city.js    createCity -> { spawns, isRoad, clampToCity, collideCircle,
-//              nearestRoadPoint, randomRoadPoint, randomSidewalkPoint }.
-//              collideCircle(x, z, r) returns the corrected {x, z}.
-//   input.js   input.move() -> {forward, strafe}; input.lookDelta() ->
-//              {dx, dy} (cleared on read); input.shooting(); input.running();
-//              input.takeActions() -> ACTION_* flags.
-//   audio.js   setEngine(speed, maxSpeed), setSiren(on), gunshot, punch,
-//              pickup, click, horn, missionComplete, busted, wasted.
-//   missions.js createMissions(world) -> { list, active, start(id),
-//              update(dt), onEvent(name, data) }; it reads state.cash,
-//              state.wanted, state.missionId, state.message, state.markers,
-//              state.missionsDone and writes state.cash / .message /
-//              .markers / .missionId. It also FORCES state.wanted (heat-wave
-//              / big-score), so the police adopt state.wanted each step.
-//   render.js  paints state.player {x,y,z,angle,health,onFoot,car,speed},
-//              state.cars[] {x,z,angle,color,model}, state.peds[],
-//              state.cops[] {x,z,angle,speed,onFoot,car}, state.markers[],
-//              state.flashes[] {x,y,z}, state.effects[].
-//   hud.js     reads state.player.ammo, state.cars, state.cops, state.gang,
-//              state.markers, state.wanted, state.cash, state.time,
-//              state.message, state.missionId.
-//   save.js    snapshot shape { cash, missionsDone, x, z, time, health }.
-//
-// Camera: the world owns state.cameraYaw (mouse drag turns it) and exposes
-// state.lookDY (the pitch drag consumed this step). main.js must sync the
-// renderer each frame — renderer.snapBehind(world.state.cameraYaw) and
-// renderer.addLook(0, world.state.lookDY) — and must NOT also read
-// input.lookDelta(), because the world already consumed it.
-// Cash lives on state.cash (missions / hud / save all read it there), not
-// on the player. Missions are wired with world.setMissions(createMissions
-// (world)); every onEvent call is guarded, so the world also runs when
-// missions.js is absent.
+// SOLMARINA — the sky, the sea, the pier and the beacon tower.
+// The world module owns the renderer, the lights and everything that is
+// not a building, a car or a person: dusk sky, water, sand, the pier
+// reaching out over the sea, the marina, and the beacon that gives the
+// city its landmark.
 
-import { CAR, HEAT, PLAYER } from './config.js';
-import {
-  ACTION_ENTER_CAR, ACTION_HORN, ACTION_INTERACT, ACTION_JUMP,
-  ACTION_MUTE, ACTION_RELOAD,
-} from './input.js';
-import { createVehicles, buildCarModel } from './vehicles.js';
-import { createPeople } from './people.js';
-import { createPolice } from './police.js';
-import { createCombat } from './combat.js';
+import * as THREE from 'three';
+import { CONFIG } from './config.js';
 
-const STEP_ARRIVE_RADIUS = 14;
-const WASTED_CASH_LOSS = 0.1;
-const RESPAWN_SECONDS = 5;
+/** Build the world: scene, camera, renderer, lights, sea and landmarks. */
+export function createWorld() {
+  const scene = new THREE.Scene();
+  scene.fog = new THREE.Fog(CONFIG.colors.fog, 180, 900);
 
-function clamp(v, a, b) {
-  return v < a ? a : v > b ? b : v;
-}
+  const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 2000);
+  camera.position.set(0, 40, 90);
 
-function cssColor(str, fallback) {
-  if (typeof str === 'string' && str[0] === '#') {
-    const n = Number.parseInt(str.slice(1), 16);
-    if (Number.isFinite(n)) return n;
-  }
-  return fallback;
-}
+  const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('game-canvas'), antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.3;
 
-function call(audio, name, ...args) {
-  if (audio && typeof audio[name] === 'function') audio[name](...args);
-}
-
-/** Push a circle out of building AABBs; returns corrected {x, z, hit}. */
-function moveWithCollision(city, x, z, dx, dz, r) {
-  if (!city || typeof city.collideCircle !== 'function') {
-    return { x: x + dx, z: z + dz, hit: false };
-  }
-  let hit = false;
-  let nx = x + dx;
-  let nz = z;
-  let out = city.collideCircle(nx, nz, r);
-  if (out && typeof out.x === 'number' && typeof out.z === 'number') {
-    if (out.x !== nx || out.z !== nz) hit = true;
-    nx = out.x;
-    nz = out.z;
-  }
-  const mx = nx;
-  nz = z + dz;
-  out = city.collideCircle(mx, nz, r);
-  if (out && typeof out.x === 'number' && typeof out.z === 'number') {
-    if (out.x !== mx || out.z !== nz) hit = true;
-    nx = out.x;
-    nz = out.z;
-  }
-  return { x: nx, z: nz, hit };
-}
-
-function clampToCity(city, x, z) {
-  if (city && typeof city.clampToCity === 'function') {
-    const c = city.clampToCity(x, z);
-    if (c && typeof c.x === 'number' && typeof c.z === 'number') return c;
-  }
-  return { x, z };
-}
-
-export function createWorld(random, city, audio) {
-  const vehicles = createVehicles(city, random, audio);
-  const people = createPeople(city, random, audio);
-  const police = createPolice(city, random, audio);
-  const combat = createCombat(audio, random);
-  let missions = null;
-
-  const state = {
-    player: {
-      x: 0, z: 0, y: 0, vy: 0, angle: 0,
-      health: PLAYER.health, armor: 0,
-      onFoot: true, car: null, speed: 0, ammo: null,
-      grounded: true,
+  // --- Sky: a big dome shaded from deep blue at the top to orange at the horizon.
+  const skyGeo = new THREE.SphereGeometry(1200, 24, 16);
+  const skyMat = new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    depthWrite: false,
+    uniforms: {
+      top: { value: new THREE.Color(CONFIG.colors.skyTop) },
+      mid: { value: new THREE.Color(CONFIG.colors.skyMid) },
+      low: { value: new THREE.Color(CONFIG.colors.horizon) },
     },
-    cars: [],
-    peds: people.peds,
-    cops: people.cops,
-    gang: people.gang,
-    pickups: combat.pickups,
-    wanted: 0,
-    time: 9,
-    day: 1,
-    cash: 200,
-    missionId: null,
-    message: '',
-    markers: [],
-    missionsDone: [],
-    storyComplete: false,
-    cameraYaw: 0,
-    lookDY: 0,
-    flashes: [],
-    effects: [],
-    over: null,
-    overTimer: 0,
-    stats: { kills: 0, carsStolen: 0, distance: 0 },
-  };
+    vertexShader: `
+      varying vec3 vPos;
+      void main() {
+        vPos = position;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }`,
+    fragmentShader: `
+      uniform vec3 top;
+      uniform vec3 mid;
+      uniform vec3 low;
+      varying vec3 vPos;
+      void main() {
+        float h = normalize(vPos).y;
+        vec3 c = h > 0.25 ? mix(mid, top, smoothstep(0.25, 0.9, h))
+                          : mix(low, mid, smoothstep(-0.05, 0.25, h));
+        gl_FragColor = vec4(c, 1.0);
+      }`,
+  });
+  const sky = new THREE.Mesh(skyGeo, skyMat);
+  scene.add(sky);
 
-  let messageTimer = 0;
-  let handbrakeTimer = 0;
-  let ramCooldown = 0;
-  let lastAttack = 'shoot';
-  let prevWanted = 0;
-  let lastSyncedWanted = 0;
-  let prevMissionId = null;
-  let lastMarkerKey = '';
-  let pierGangSpawned = false;
+  // --- Lights: a low orange sun and a soft purple fill from the sky.
+  const sun = new THREE.DirectionalLight(CONFIG.colors.sun, 2.7);
+  sun.position.set(-220, 90, -160);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.camera.left = -260;
+  sun.shadow.camera.right = 260;
+  sun.shadow.camera.top = 260;
+  sun.shadow.camera.bottom = -260;
+  sun.shadow.camera.far = 900;
+  sun.shadow.bias = -0.0004;
+  scene.add(sun);
+  const hemi = new THREE.HemisphereLight(0x8a6bb8, 0x2e2a33, 1.3);
+  scene.add(hemi);
 
-  function spawnPoint(name, fallback) {
-    if (city && city.spawns && city.spawns[name]) return city.spawns[name];
-    return fallback;
-  }
+  // --- Ground: one big slab; the city, beach and water sit on top of it.
+  const groundMat = new THREE.MeshStandardMaterial({ color: CONFIG.colors.grass, roughness: 1 });
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(1400, 1400), groundMat);
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.set(60, -0.1, 0);
+  ground.receiveShadow = true;
+  scene.add(ground);
 
-  function setMessage(text, seconds) {
-    state.message = text;
-    messageTimer = seconds || 3;
-  }
+  // City asphalt: the whole street grid sits on one dark slab.
+  const asphalt = new THREE.Mesh(
+    new THREE.PlaneGeometry(CONFIG.worldSize + 40, CONFIG.worldSize + 40),
+    new THREE.MeshStandardMaterial({ color: CONFIG.colors.road, roughness: 0.95 }),
+  );
+  asphalt.rotation.x = -Math.PI / 2;
+  asphalt.position.set(0, 0, 0);
+  asphalt.receiveShadow = true;
+  scene.add(asphalt);
 
-  function missionEvent(name, data) {
-    if (missions && typeof missions.onEvent === 'function') {
-      missions.onEvent(name, data || {});
+  // --- Beach and sea on the east edge.
+  const sand = new THREE.Mesh(
+    new THREE.PlaneGeometry(70, CONFIG.worldSize + 120),
+    new THREE.MeshStandardMaterial({ color: CONFIG.colors.sand, roughness: 1 }),
+  );
+  sand.rotation.x = -Math.PI / 2;
+  sand.position.set(CONFIG.beachX + 18, 0.05, 0);
+  sand.receiveShadow = true;
+  scene.add(sand);
+
+  const waterMat = new THREE.MeshStandardMaterial({
+    color: CONFIG.colors.water,
+    roughness: 0.25,
+    metalness: 0.1,
+    transparent: true,
+    opacity: 0.88,
+  });
+  const water = new THREE.Mesh(new THREE.PlaneGeometry(420, 1100), waterMat);
+  water.rotation.x = -Math.PI / 2;
+  water.position.set(CONFIG.waterX + 210, 0.1, 0);
+  scene.add(water);
+
+  // --- The pier: wooden planks on posts, running out over the water.
+  const pierGroup = new THREE.Group();
+  const plankMat = new THREE.MeshStandardMaterial({ color: 0x8a6a48, roughness: 0.9 });
+  const postMat = new THREE.MeshStandardMaterial({ color: 0x5d4630, roughness: 1 });
+  const pier = CONFIG.pier;
+  const deck = new THREE.Mesh(new THREE.BoxGeometry(pier.x1 - pier.x0, 0.6, pier.width), plankMat);
+  deck.position.set((pier.x0 + pier.x1) / 2, 1.2, pier.z);
+  deck.castShadow = true;
+  deck.receiveShadow = true;
+  pierGroup.add(deck);
+  for (let x = pier.x0 + 8; x < pier.x1; x += 14) {
+    for (const dz of [-pier.width / 2 + 1, pier.width / 2 - 1]) {
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 3.4, 8), postMat);
+      post.position.set(x, -0.2, pier.z + dz);
+      pierGroup.add(post);
     }
   }
-
-  /** The two mission vehicles: the Comet GT and the armored van. */
-  function ensureMissionCars() {
-    const parked = vehicles.parkedCars;
-    if (!parked.some((c) => c.missionKind === 'comet')) {
-      const at = city && typeof city.nearestRoadPoint === 'function'
-        ? city.nearestRoadPoint(60, 80)
-        : { x: 60, z: 72 };
-      const mesh = buildCarModel(0xd43d2a, 'sports');
-      mesh.position.set(at.x, 0, at.z);
-      mesh.rotation.y = Math.PI / 2;
-      parked.push({
-        mesh, kind: 'sports', model: 'sport', color: 0xd43d2a,
-        missionKind: 'comet', x: at.x, z: at.z, angle: Math.PI / 2,
-        speed: 0, parked: true, occupied: false, health: 100, disabled: false,
-      });
-    }
-    if (!parked.some((c) => c.missionKind === 'armored')) {
-      const at = city && typeof city.nearestRoadPoint === 'function'
-        ? city.nearestRoadPoint(-60, -140)
-        : { x: -60, z: -144 };
-      const mesh = buildCarModel(0x2c3e50, 'van');
-      mesh.position.set(at.x, 0, at.z);
-      mesh.rotation.y = Math.PI / 2;
-      parked.push({
-        mesh, kind: 'van', model: 'van', color: 0x2c3e50,
-        missionKind: 'armored', x: at.x, z: at.z, angle: Math.PI / 2,
-        speed: 0, parked: true, occupied: false, health: 100, disabled: false,
-      });
+  // Rails along both sides of the pier.
+  for (const dz of [-pier.width / 2 + 0.4, pier.width / 2 - 0.4]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(pier.x1 - pier.x0, 0.18, 0.18), postMat);
+    rail.position.set((pier.x0 + pier.x1) / 2, 2.6, pier.z + dz);
+    pierGroup.add(rail);
+    for (let x = pier.x0 + 4; x < pier.x1; x += 12) {
+      const baluster = new THREE.Mesh(new THREE.BoxGeometry(0.18, 1.3, 0.18), postMat);
+      baluster.position.set(x, 1.9, pier.z + dz);
+      pierGroup.add(baluster);
     }
   }
+  scene.add(pierGroup);
 
-  function pickupSpots() {
-    const spots = [];
-    const put = (name, kind) => {
-      const p = spawnPoint(name, null);
-      if (p) spots.push({ x: p.x, z: p.z, kind });
-    };
-    put('hospital', 'health');
-    put('pier', 'health');
-    put('hideout', 'ammo');
-    put('policeStation', 'ammo');
-    put('marina', 'ammo');
-    return spots;
+  // --- The marina: docks and moored boats in the south-east corner.
+  const marinaGroup = new THREE.Group();
+  const dockMat = new THREE.MeshStandardMaterial({ color: 0x6b543a, roughness: 0.9 });
+  const hullColors = [0xd8d8d8, 0x3a6ea5, 0xc25b4e, 0x4e8a6b];
+  for (let i = 0; i < 3; i++) {
+    const dock = new THREE.Mesh(new THREE.BoxGeometry(8, 0.5, 60), dockMat);
+    dock.position.set(300 + i * 18, 1.0, 250);
+    dock.castShadow = true;
+    marinaGroup.add(dock);
+  }
+  for (let i = 0; i < 5; i++) {
+    const boat = new THREE.Group();
+    const hull = new THREE.Mesh(
+      new THREE.BoxGeometry(5, 1.6, 14),
+      new THREE.MeshStandardMaterial({ color: hullColors[i % hullColors.length], roughness: 0.5 }),
+    );
+    hull.position.y = 0.6;
+    hull.castShadow = true;
+    boat.add(hull);
+    const cabin = new THREE.Mesh(
+      new THREE.BoxGeometry(3.4, 1.6, 5),
+      new THREE.MeshStandardMaterial({ color: 0xf0ead8, roughness: 0.6 }),
+    );
+    cabin.position.set(0, 2.1, -1);
+    boat.add(cabin);
+    boat.position.set(292 + i * 16, 0.4, 236 + (i % 2) * 26);
+    boat.rotation.y = (i % 2 === 0 ? 1 : -1) * 0.12;
+    marinaGroup.add(boat);
+  }
+  scene.add(marinaGroup);
+
+  // --- The beacon tower at the end of the pier: the city's landmark.
+  const beaconGroup = new THREE.Group();
+  const towerMat = new THREE.MeshStandardMaterial({ color: 0xe8e0d0, roughness: 0.7 });
+  const stripeMat = new THREE.MeshStandardMaterial({ color: 0xc25b4e, roughness: 0.7 });
+  const tower = new THREE.Mesh(new THREE.CylinderGeometry(3.2, 4.6, 34, 12), towerMat);
+  tower.position.y = 17;
+  tower.castShadow = true;
+  beaconGroup.add(tower);
+  for (const y of [10, 20, 30]) {
+    const stripe = new THREE.Mesh(new THREE.CylinderGeometry(3.45, 3.75, 2.2, 12), stripeMat);
+    stripe.position.y = y;
+    beaconGroup.add(stripe);
+  }
+  const lampRoom = new THREE.Mesh(
+    new THREE.CylinderGeometry(2.6, 2.6, 3.4, 10),
+    new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.4, metalness: 0.4 }),
+  );
+  lampRoom.position.y = 35.5;
+  beaconGroup.add(lampRoom);
+  const lamp = new THREE.Mesh(
+    new THREE.SphereGeometry(1.7, 12, 10),
+    new THREE.MeshStandardMaterial({ color: 0xffe9a8, emissive: 0xffc94d, emissiveIntensity: 2.4 }),
+  );
+  lamp.position.y = 35.5;
+  beaconGroup.add(lamp);
+  // A rotating beam: a long translucent cone.
+  const beamMat = new THREE.MeshBasicMaterial({
+    color: 0xffe9a8,
+    transparent: true,
+    opacity: 0.14,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const beam = new THREE.Mesh(new THREE.ConeGeometry(9, 120, 12, 1, true), beamMat);
+  beam.rotation.z = Math.PI / 2;
+  beam.position.set(60, 35.5, 0);
+  const beamPivot = new THREE.Group();
+  beamPivot.add(beam);
+  beamPivot.position.y = 0;
+  beaconGroup.add(beamPivot);
+  beaconGroup.position.set(CONFIG.beacon.x, 1.5, CONFIG.beacon.z);
+  scene.add(beaconGroup);
+
+  // A warm lamp low over the pier, so the firefight under the beacon
+  // reads at dusk instead of sinking into shadow.
+  const pierLight = new THREE.PointLight(0xffc27a, 1.4, 130, 1.6);
+  pierLight.position.set(CONFIG.pier.x0 + 64, 10, 0);
+  scene.add(pierLight);
+
+  // A few clouds: flat, slow-drifting puffs high above the city.
+  const cloudMat = new THREE.MeshStandardMaterial({ color: 0xd9a0a8, roughness: 1, transparent: true, opacity: 0.55 });
+  const clouds = [];
+  for (let i = 0; i < 7; i++) {
+    const cloud = new THREE.Group();
+    const puffs = 3 + (i % 3);
+    for (let j = 0; j < puffs; j++) {
+      const puff = new THREE.Mesh(new THREE.SphereGeometry(14 + j * 5, 10, 8), cloudMat);
+      puff.position.set(j * 16 - puffs * 7, j % 2 === 0 ? 0 : 4, (j % 3) * 8 - 8);
+      puff.scale.y = 0.45;
+      cloud.add(puff);
+    }
+    cloud.position.set(-320 + i * 110, 150 + (i % 3) * 22, -260 + (i * 67) % 520);
+    scene.add(cloud);
+    clouds.push(cloud);
   }
 
-  function rebuildCarList() {
-    state.cars = vehicles.parkedCars
-      .concat(vehicles.traffic.cars, police.policeCars);
-  }
-
-  function reset() {
-    const spawn = spawnPoint('playerSpawn', { x: 0, z: 0 });
-    const p = state.player;
-    p.x = spawn.x;
-    p.z = spawn.z;
-    p.y = 0;
-    p.vy = 0;
-    p.angle = 0;
-    p.health = PLAYER.health;
-    p.armor = 0;
-    p.onFoot = true;
-    p.car = null;
-    p.speed = 0;
-    p.ammo = combat.state.ammo;
-    p.grounded = true;
-    state.wanted = 0;
-    state.time = 9;
-    state.day = 1;
-    state.cash = 200;
-    state.missionId = null;
-    state.message = '';
-    state.markers = [];
-    state.missionsDone = [];
-    state.storyComplete = false;
-    state.cameraYaw = 0;
-    state.lookDY = 0;
-    state.flashes = [];
-    state.effects = [];
-    state.over = null;
-    state.overTimer = 0;
-    state.stats.kills = 0;
-    state.stats.carsStolen = 0;
-    state.stats.distance = 0;
-    messageTimer = 0;
-    handbrakeTimer = 0;
-    ramCooldown = 0;
-    prevWanted = 0;
-    lastSyncedWanted = 0;
-    prevMissionId = null;
-    lastMarkerKey = '';
-    pierGangSpawned = false;
-    vehicles.reset();
-    people.reset();
-    police.reset();
-    combat.reset();
-    combat.spawnPickups(pickupSpots());
-    ensureMissionCars();
-    rebuildCarList();
-    setMessage('Welcome to Solmarina. Steal a car, mind the law.', 4);
-  }
-
-  // --- Crime, damage, death -------------------------------------------------
-
-  function handleKill(target) {
-    state.stats.kills += 1;
-    if (target.kind === 'ped') {
-      police.addWanted(HEAT.killPed || 2, 'pedestrian killed');
-      setMessage('A pedestrian is down. The PD is coming.', 3);
-    } else if (target.kind === 'cop') {
-      police.addWanted(HEAT.killCop || 2, 'officer killed');
-      setMessage('An officer is down. The whole PD is coming.', 3);
-    } else if (target.kind === 'gang') {
-      state.cash += 25;
-      setMessage('Reef King down. +$25.', 2);
-    }
-    state.wanted = police.state.stars;
-    missionEvent('kill', { kind: target.kind });
-  }
-
-  function handleHit(target) {
-    if (!target || target.dead) return;
-    if (target.kind === 'ped' || target.kind === 'cop') {
-      // One assault report per victim: repeated hits on the same person
-      // don't stack stars (the kill itself adds killPed / killCop).
-      if (!target.reported) {
-        target.reported = true;
-        police.addWanted(lastAttack === 'punch' ? (HEAT.punchPed || 1) : (HEAT.shoot || 1), 'assault');
-        state.wanted = police.state.stars;
-      }
-    }
-  }
-
-  function damagePlayer(amount, from) {
-    const p = state.player;
-    if (state.over) return;
-    let dmg = amount;
-    if (p.armor > 0) {
-      const absorbed = Math.min(p.armor, dmg);
-      p.armor -= absorbed;
-      dmg -= absorbed;
-    }
-    p.health -= dmg;
-    void from;
-    if (p.health <= 0) {
-      p.health = 0;
-      wasted();
-    }
-  }
-
-  function wasted() {
-    const loss = Math.floor(state.cash * WASTED_CASH_LOSS);
-    state.cash -= loss;
-    state.over = 'wasted';
-    state.overTimer = RESPAWN_SECONDS;
-    police.setWanted(0);
-    state.wanted = 0;
-    call(audio, 'wasted');
-    setMessage(`WASTED. The hospital took $${loss}.`, 5);
-    missionEvent('wasted', {});
-  }
-
-  function handleBust(kind) {
-    const p = state.player;
-    const fine = Math.min(state.cash, 100 + 50 * Math.max(1, prevWanted));
-    state.cash -= fine;
-    if (p.car) {
-      p.car.speed = 0;
-      p.car.parked = true;
-      p.car = null;
-    }
-    p.onFoot = true;
-    p.speed = 0;
-    state.over = 'busted';
-    state.overTimer = RESPAWN_SECONDS;
-    police.setWanted(0);
-    state.wanted = 0;
-    call(audio, 'busted');
-    setMessage(`BUSTED (${kind}). Fine $${fine}.`, 5);
-    missionEvent('busted', { kind });
-  }
-
-  /** Respawn after wasted / busted (also the HUD Retry button's target). */
-  function respawn() {
-    const p = state.player;
-    const wasOver = state.over;
-    const spot = wasOver === 'busted'
-      ? spawnPoint('policeStation', { x: 42, z: 150 })
-      : spawnPoint('hospital', { x: -102, z: -102 });
-    if (p.car) {
-      p.car.speed = 0;
-      p.car.parked = true;
-      p.car = null;
-    }
-    p.x = spot.x;
-    p.z = spot.z;
-    p.y = 0;
-    p.vy = 0;
-    p.angle = 0;
-    p.health = PLAYER.health;
-    p.onFoot = true;
-    p.speed = 0;
-    p.grounded = true;
-    state.over = null;
-    state.overTimer = 0;
-    setMessage(wasOver === 'busted'
-      ? 'Released. The debt is still waiting.'
-      : 'Patched up. The debt is still waiting.', 4);
-  }
-
-  // --- Entering / leaving cars ----------------------------------------------
-
-  function nearestParkedCar(maxDist) {
-    const p = state.player;
-    // The vehicles module owns the parked-car search now.
-    if (vehicles && typeof vehicles.nearestParked === 'function') {
-      return vehicles.nearestParked(p.x, p.z, maxDist);
-    }
-    let best = null;
-    let bestD = maxDist;
-    for (const car of vehicles.parkedCars) {
-      const d = Math.hypot(car.x - p.x, car.z - p.z);
-      if (d < bestD) {
-        bestD = d;
-        best = car;
-      }
-    }
-    return best;
-  }
-
-  function tryEnterCar() {
-    const p = state.player;
-    const car = nearestParkedCar(3.6);
-    if (!car) {
-      setMessage('No car nearby.', 2);
-      return;
-    }
-    if (car.disabled) {
-      setMessage('That car is wrecked.', 2);
-      return;
-    }
-    const wasOccupied = car.occupied;
-    if (wasOccupied) {
-      // The driver bails and runs.
-      people.spawnFleeingPed(car.x + 2, car.z + 1, car.x, car.z);
-      car.occupied = false;
-      const witnessed = people.peds.some((ped) => !ped.dead
-        && Math.hypot(ped.x - car.x, ped.z - car.z) < 30)
-        || people.cops.some((cop) => !cop.dead
-          && Math.hypot(cop.x - car.x, cop.z - car.z) < 30);
-      if (witnessed) {
-        police.addWanted(HEAT.stealCar || 1, 'car stolen');
-        state.wanted = police.state.stars;
-        setMessage('Car stolen! Someone saw that.', 3);
-      } else {
-        setMessage('Car stolen. Nobody saw.', 2);
-      }
-    } else {
-      setMessage('You took the car.', 2);
-    }
-    car.parked = false;
-    p.car = car;
-    p.onFoot = false;
-    p.speed = 0;
-    p.angle = car.angle;
-    state.cameraYaw = car.angle;
-    state.stats.carsStolen += 1;
-    missionEvent('enter-car', { kind: car.kind });
-    missionEvent('steal', { kind: car.missionKind || car.kind, model: car.model });
-    call(audio, 'click');
-  }
-
-  function exitCar() {
-    const p = state.player;
-    const car = p.car;
-    if (!car) return;
-    car.speed = 0;
-    car.parked = true;
-    const sideX = Math.cos(car.angle);
-    const sideZ = -Math.sin(car.angle);
-    const spot = moveWithCollision(city, car.x, car.z, sideX * 2.2, sideZ * 2.2, PLAYER.radius);
-    p.x = spot.x;
-    p.z = spot.z;
-    p.y = 0;
-    p.vy = 0;
-    p.angle = car.angle;
-    p.onFoot = true;
-    p.car = null;
-    p.speed = 0;
-    p.grounded = true;
-    call(audio, 'click');
-  }
-
-  // --- Save shape ------------------------------------------------------------
-
-  function snapshot() {
-    return {
-      cash: Math.floor(state.cash),
-      missionsDone: state.missionsDone.slice(),
-      x: state.player.x,
-      z: state.player.z,
-      time: state.time,
-      health: state.player.health,
-    };
-  }
-
-  function restoreSave(data) {
-    if (!data || typeof data !== 'object') return false;
-    if (typeof data.cash === 'number') state.cash = data.cash;
-    if (typeof data.x === 'number') state.player.x = data.x;
-    if (typeof data.z === 'number') state.player.z = data.z;
-    if (typeof data.time === 'number') state.time = data.time;
-    if (typeof data.health === 'number') {
-      state.player.health = clamp(data.health, 0, PLAYER.health);
-    }
-    if (Array.isArray(data.missionsDone)) state.missionsDone = data.missionsDone.slice();
-    return true;
-  }
-
-  // --- The step ---------------------------------------------------------------
-
-  function step(dt, input, actions) {
-    const events = { wasted: false, busted: false, killed: null, stole: false, enteredCar: false };
-    const p = state.player;
-
-    // Clock: one real second is one game minute.
-    state.time += dt / 60;
-    if (state.time >= 24) {
-      state.time -= 24;
-      state.day += 1;
-    }
-    if (messageTimer > 0) {
-      messageTimer -= dt;
-      if (messageTimer <= 0 && !state.missionId) state.message = '';
-    }
-    if (ramCooldown > 0) ramCooldown -= dt;
-
-    const acts = typeof actions === 'number'
-      ? actions
-      : (input && typeof input.takeActions === 'function' ? input.takeActions() : 0);
-
-    // Camera: the world owns the yaw (mouse drag); lookDelta is consumed
-    // here and the pitch drag is handed back as state.lookDY for main.js
-    // to forward to renderer.addLook(0, lookDY).
-    if (input && typeof input.lookDelta === 'function') {
-      const look = input.lookDelta();
-      if (look) {
-        if (typeof look.dx === 'number') state.cameraYaw -= look.dx * 0.005;
-        state.lookDY = typeof look.dy === 'number' ? look.dy : 0;
-      } else {
-        state.lookDY = 0;
-      }
-    }
-
-    // Wasted / busted: the world keeps simmering behind the game-over
-    // screen, then respawns on its own (HUD Retry calls respawn() early).
-    if (state.over) {
-      state.overTimer -= dt;
-      vehicles.update(dt, null, p.x, p.z);
-      people.update(dt, { player: p, wanted: 0, danger: null });
-      rebuildCarList();
-      if (state.overTimer <= 0) {
-        const was = state.over;
-        respawn();
-        if (was === 'wasted') events.wasted = true;
-        else events.busted = true;
-      }
-      return events;
-    }
-
-    const move = input && typeof input.move === 'function'
-      ? input.move()
-      : { forward: 0, strafe: 0 };
-    const fwd = clamp(move.forward || 0, -1, 1);
-    const strafe = clamp(move.strafe || 0, -1, 1);
-    const running = !!(input && typeof input.running === 'function' && input.running());
-    const shooting = !!(input && typeof input.shooting === 'function' && input.shooting());
-
-    if (acts & ACTION_MUTE) {
-      if (audio && typeof audio.isMuted === 'function' && typeof audio.setMuted === 'function') {
-        audio.setMuted(!audio.isMuted());
-      }
-    }
-    if (acts & ACTION_HORN) call(audio, 'horn');
-
-    if (acts & ACTION_ENTER_CAR) {
-      if (p.onFoot) {
-        tryEnterCar();
-        events.enteredCar = !p.onFoot;
-        if (events.enteredCar) events.stole = true;
-      } else {
-        exitCar();
-      }
-    }
-    if (acts & ACTION_INTERACT) {
-      missionEvent('interact', { x: p.x, z: p.z });
-    }
-
-    // --- On foot ------------------------------------------------------------
-    if (p.onFoot) {
-      const speed = running ? PLAYER.runSpeed : PLAYER.walkSpeed;
-      // Camera-relative movement: W walks away from the camera.
-      const mx = Math.sin(state.cameraYaw) * fwd + Math.cos(state.cameraYaw) * strafe;
-      const mz = Math.cos(state.cameraYaw) * fwd - Math.sin(state.cameraYaw) * strafe;
-      const len = Math.hypot(mx, mz);
-      let movedDist = 0;
-      if (len > 0.01) {
-        const nx = mx / Math.max(1, len);
-        const nz = mz / Math.max(1, len);
-        p.angle = Math.atan2(nx, nz);
-        const moved = moveWithCollision(city, p.x, p.z, nx * speed * dt, nz * speed * dt, PLAYER.radius);
-        movedDist = Math.hypot(moved.x - p.x, moved.z - p.z);
-        p.x = moved.x;
-        p.z = moved.z;
-        const c = clampToCity(city, p.x, p.z);
-        p.x = c.x;
-        p.z = c.z;
-        p.speed = speed;
-      } else {
-        p.speed = 0;
-      }
-      state.stats.distance += movedDist;
-
-      // Jump (Space, one-shot).
-      if ((acts & ACTION_JUMP) && p.grounded) {
-        p.vy = PLAYER.jumpSpeed;
-        p.grounded = false;
-      }
-      if (!p.grounded) {
-        p.vy -= PLAYER.gravity * dt;
-        p.y += p.vy * dt;
-        if (p.y <= 0) {
-          p.y = 0;
-          p.vy = 0;
-          p.grounded = true;
-        }
-      }
-
-      // Combat: hold LMB to shoot (pistol) or punch (fists); R reloads.
-      if (acts & ACTION_RELOAD) combat.reload();
-      if (shooting) {
-        if (combat.state.weapon === 'pistol' && combat.state.ammo <= 0 && combat.state.reserve > 0) {
-          combat.reload();
-        } else {
-          lastAttack = combat.state.weapon === 'pistol' ? 'shoot' : 'punch';
-          p.angle = state.cameraYaw;
-          const res = combat.shoot(combatCtx());
-          if (res && res.target) handleHit(res.target);
-          if (res && res.targets) {
-            for (const t of res.targets) handleHit(t);
-          }
-        }
-      }
-      call(audio, 'setEngine', 0, CAR.maxSpeed);
-    } else if (p.car) {
-      // --- Driving ----------------------------------------------------------
-      if (acts & ACTION_JUMP) handbrakeTimer = 0.4;
-      if (handbrakeTimer > 0) handbrakeTimer -= dt;
-      const car = p.car;
-      car.others = vehicles.traffic.cars
-        .concat(vehicles.parkedCars.filter((c) => c !== car), police.policeCars);
-      const speedBefore = car.speed;
-      const res = vehicles.playerCarPhysics(car,
-        { forward: fwd, strafe, handbrake: handbrakeTimer > 0 }, dt);
-      p.x = car.x;
-      p.z = car.z;
-      p.angle = car.angle;
-      p.speed = car.speed;
-      state.stats.distance += Math.abs(car.speed) * dt;
-      if (res.crashed && Math.abs(speedBefore) > 12) {
-        damagePlayer(6, 'crash');
-        car.health -= 8;
-        call(audio, 'crash');
-        if (car.health <= 0) car.disabled = true;
-      }
-      call(audio, 'setEngine', Math.abs(car.speed), CAR.maxSpeed);
-    }
-
-    // --- Subsystems -----------------------------------------------------------
-    vehicles.update(dt, p.onFoot ? null : p.car, p.x, p.z);
-    const peopleRes = people.update(dt, { player: p, wanted: police.state.stars, danger: null });
-    // Wanted sync. The police own the stars; state.wanted is the mirror
-    // the HUD / missions read. But missions.js also WRITES state.wanted
-    // directly (heat-wave / big-score force 2-3 stars), so the world can
-    // tell a mission's write apart from its own mirror: if state.wanted
-    // differs from the last value the world mirrored, a mission changed
-    // it and the police adopt it; otherwise the police keep their stars
-    // and the mirror follows them. (Adopting state.wanted blindly would
-    // clobber any direct police.addWanted / setWanted with a stale mirror.)
-    if (state.wanted !== lastSyncedWanted) {
-      police.setWanted(state.wanted);
-    }
-    const combatRes = combatCtx();
-    combat.update(dt, combatRes);
-    const policeEvents = police.update(dt,
-      { x: p.x, z: p.z, angle: p.angle, speed: p.speed, onFoot: p.onFoot, car: p.car },
-      { copTouching: peopleRes.copTouching, nearestCopDist: peopleRes.nearestCop });
-    prevWanted = state.wanted;
-    state.wanted = police.state.stars;
-    lastSyncedWanted = state.wanted;
-    if (prevWanted > 0 && state.wanted === 0) missionEvent('escape', {});
-    if (policeEvents.rammed && ramCooldown <= 0) {
-      ramCooldown = 1;
-      damagePlayer(8, 'ram');
-    }
-    if (policeEvents.busted) {
-      handleBust(policeEvents.busted);
-      events.busted = true;
-    }
-
-    // Mission: Reef Kings at the pier for 'Pier Pressure'.
-    if (state.missionId !== prevMissionId) {
-      prevMissionId = state.missionId;
-      if (state.missionId === 'pier-pressure' && !pierGangSpawned) {
-        pierGangSpawned = true;
-        const pier = spawnPoint('pier', { x: -416, z: 40 });
-        people.spawnGang(pier.x, pier.z, 5);
-      }
-    }
-
-    // Arrive / deliver: edge-triggered when the player reaches the marker.
-    if (state.markers && state.markers.length > 0) {
-      const m = state.markers[0];
-      const key = `${m.x},${m.z},${m.kind}`;
-      const d = Math.hypot(p.x - m.x, p.z - m.z);
-      if (d < STEP_ARRIVE_RADIUS && lastMarkerKey !== key) {
-        lastMarkerKey = key;
-        missionEvent('arrive', { x: p.x, z: p.z });
-        if (m.kind === 'dropoff') missionEvent('deliver', { kind: m.kind });
-      } else if (d >= STEP_ARRIVE_RADIUS && lastMarkerKey === key) {
-        lastMarkerKey = '';
-      }
-    }
-
-    // Muzzle flash + ammo HUD sync.
-    state.flashes = combat.state.flashTimer > 0
-      ? [{ x: combat.state.flash.x, y: combat.state.flash.y, z: combat.state.flash.z }]
-      : [];
-    p.ammo = combat.state.weapon === 'pistol' ? combat.state.ammo : null;
-
-    rebuildCarList();
-    if (missions && typeof missions.update === 'function') missions.update(dt);
-    return events;
-
-    function combatCtx() {
-      return {
-        origin: { x: p.x, y: 1.5 + p.y, z: p.z },
-        angle: state.cameraYaw,
-        player: p,
-        peds: people.peds,
-        cops: people.cops,
-        gang: people.gang,
-        cars: state.cars,
-        wanted: police.state.stars,
-        onKill: handleKill,
-        onHit: handleHit,
-        onShoot: (origin) => people.fleeFrom(origin.x, origin.z, 30),
-        onEnemyShoot: (origin) => people.fleeFrom(origin.x, origin.z, 25),
-        onPlayerDamage: (amount, from) => damagePlayer(amount, from),
-        onPickup: (kind) => {
-          if (kind === 'health') {
-            p.health = Math.min(PLAYER.health, p.health + 50);
-            setMessage('Health +50.', 2);
-          } else {
-            combat.giveAmmo(24);
-            setMessage('Ammo +24.', 2);
-          }
-        },
-      };
-    }
-  }
-
-  function setMissions(m) {
-    missions = m || null;
-  }
-
-  reset();
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
 
   return {
-    state, reset, step, respawn, snapshot, restoreSave, setMissions,
-    get missions() {
-      return missions;
+    scene,
+    camera,
+    renderer,
+    sun,
+    water,
+    beaconGroup,
+    beamPivot,
+    lamp,
+    clouds,
+
+    /** Animate the sea, the beacon beam and the clouds. */
+    update(dt, t) {
+      water.position.y = 0.1 + Math.sin(t * 0.5) * 0.15;
+      beamPivot.rotation.y = t * 0.45;
+      lamp.material.emissiveIntensity = 2.0 + Math.sin(t * 3.0) * 0.7;
+      for (let i = 0; i < clouds.length; i++) {
+        const c = clouds[i];
+        c.position.x += dt * (1.5 + i * 0.2);
+        if (c.position.x > 420) c.position.x = -420;
+      }
     },
-    vehicles, people, police, combat,
   };
 }

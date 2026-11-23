@@ -1,407 +1,197 @@
-// SOLMARINA — HUD (heads-up display).
-//
-// createHud(document) builds every DOM element the player sees on top of
-// the 3D canvas: wanted stars, cash, clock, minimap, health bar, speed,
-// ammo, objective text, message toasts, and the title / pause / how-to /
-// game-over screens. main.js calls createHud(document) once, then
-// hud.update(state) every frame with the world state:
-//
-//   state.player  { x, z, angle, health, onFoot, car, speed, ammo }
-//   state.cars[]  { x, z }  traffic
-//   state.cops[]  { x, z }  police
-//   state.gang[]  { x, z }  Reef Kings
-//   state.markers[] { x, z, kind, label }
-//   state.wanted (0-5), state.cash, state.time (hours 0-24),
-//   state.message, state.missionId
-//
-// The minimap covers the whole city. City bounds are fixed here so the
-// HUD and the city module agree: the ground plane runs x and z from -360
-// to 360 (road grid -288..288, sand beach on the west (-x) edge, marina
-// water along the south (+z) edge). North is -z (up on the minimap).
-//
-// Buttons dispatch 'solmarina' CustomEvents on the document with
-// detail.action in { new-game, continue, resume, retry, to-title }.
-// Menu screens hide all gameplay chrome via the .sm-in-menu class on the
-// HUD root, so the title screen never shows stars, cash, the objective
-// line or the minimap.
+// SOLMARINA — the HUD: money, health, wanted stars, objective, speed,
+// ammo, toasts, the minimap, and the start and death screens.
+// Layout follows the readability rule: every element is anchored to a
+// screen edge on a dark translucent chip, so it reads over dusk light.
 
-const CITY_MIN = -360;
-const CITY_MAX = 360;
-const CITY_SPAN = CITY_MAX - CITY_MIN;
-const MAP_SIZE = 220;
-const SAVE_KEY = 'solmarina.save.v1';
+import { CONFIG, clamp } from './config.js';
 
-const MARKER_COLORS = {
-  objective: '#ffd23f',
-  pickup: '#3fd2ff',
-  dropoff: '#3fff7a',
-  target: '#ff4d4d',
-  combat: '#ff4d4d',
-  safehouse: '#3fff7a',
-  package: '#c77dff',
-};
+/** Build the HUD. The DOM skeleton lives in index.html; this wires it. */
+export function createHud() {
+  const el = (id) => document.getElementById(id);
+  const moneyEl = el('money');
+  const healthFill = el('health-fill');
+  const healthText = el('health-text');
+  const starsEl = el('stars');
+  const objectiveEl = el('objective');
+  const speedEl = el('speed');
+  const ammoEl = el('ammo');
+  const toastEl = el('toast');
+  const minimap = el('minimap');
+  const mapCtx = minimap.getContext('2d');
+  const startScreen = el('start-screen');
+  const deathScreen = el('death-screen');
+  const startBtn = el('start-btn');
+  const newGameBtn = el('new-game-btn');
+  const respawnBtn = el('respawn-btn');
+  let toastTimer = null;
 
-function el(doc, tag, className, text) {
-  const node = doc.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined && text !== null) node.textContent = text;
-  return node;
-}
-
-function formatCash(cash) {
-  const n = Math.floor(cash || 0);
-  return '$' + n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-}
-
-function formatClock(time) {
-  const t = ((time || 0) % 24 + 24) % 24;
-  const h = Math.floor(t);
-  const m = Math.floor((t - h) * 60);
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-}
-
-function formatSpeed(speed) {
-  // World speed is metres per second; show km/h.
-  return `${Math.round(Math.abs(speed || 0) * 3.6)} km/h`;
-}
-
-export function createHud(document) {
-  const root = el(document, 'div', 'sm-hud');
-  document.body.appendChild(root);
-
-  // --- Top-left: wanted stars + cash --------------------------------------
-  const topLeft = el(document, 'div', 'sm-topleft');
-  const stars = el(document, 'div', 'sm-stars');
-  const cash = el(document, 'div', 'sm-cash', '$0');
-  topLeft.appendChild(stars);
-  topLeft.appendChild(cash);
-  root.appendChild(topLeft);
-
-  // --- Top-right: clock -----------------------------------------------------
-  const clock = el(document, 'div', 'sm-clock', '12:00');
-  root.appendChild(clock);
-
-  // --- Centre-top: message toasts -------------------------------------------
-  const toasts = el(document, 'div', 'sm-toasts');
-  root.appendChild(toasts);
-
-  // --- Centre: objective ------------------------------------------------------
-  const objective = el(document, 'div', 'sm-objective');
-  const objectiveText = el(document, 'span', 'sm-objective-text');
-  const objectiveDist = el(document, 'span', 'sm-objective-dist');
-  objective.appendChild(objectiveText);
-  objective.appendChild(objectiveDist);
-  root.appendChild(objective);
-
-  // --- Bottom-left: health bar + minimap ---------------------------------------
-  const bottomLeft = el(document, 'div', 'sm-bottomleft');
-  const healthWrap = el(document, 'div', 'sm-health-wrap');
-  const healthLabel = el(document, 'span', 'sm-health-label', 'HEALTH');
-  const healthBar = el(document, 'div', 'sm-health-bar');
-  const healthFill = el(document, 'div', 'sm-health-fill');
-  healthBar.appendChild(healthFill);
-  healthWrap.appendChild(healthLabel);
-  healthWrap.appendChild(healthBar);
-  const mapCanvas = el(document, 'canvas', 'sm-minimap');
-  mapCanvas.width = MAP_SIZE;
-  mapCanvas.height = MAP_SIZE;
-  bottomLeft.appendChild(healthWrap);
-  bottomLeft.appendChild(mapCanvas);
-  root.appendChild(bottomLeft);
-  const mapCtx = mapCanvas.getContext('2d');
-
-  // --- Bottom-right: speed + ammo ----------------------------------------------
-  const bottomRight = el(document, 'div', 'sm-bottomright');
-  const speed = el(document, 'div', 'sm-speed', '0 km/h');
-  const ammo = el(document, 'div', 'sm-ammo', '');
-  bottomRight.appendChild(speed);
-  bottomRight.appendChild(ammo);
-  root.appendChild(bottomRight);
-
-  // --- Screens ------------------------------------------------------------------
-  function makeScreen(name) {
-    const screen = el(document, 'div', `sm-screen sm-screen-${name}`);
-    screen.style.display = 'none';
-    root.appendChild(screen);
-    return screen;
-  }
-
-  function dispatch(action) {
-    const view = document.defaultView;
-    document.dispatchEvent(new view.CustomEvent('solmarina', { detail: { action } }));
-  }
-
-  // Does a save exist? The Continue button only appears when one does.
-  function hasSave() {
-    try {
-      const view = document.defaultView;
-      return !!(view && view.localStorage && view.localStorage.getItem(SAVE_KEY));
-    } catch {
-      return false;
+  /** A star row: filled gold stars for the wanted level, dim for the rest. */
+  function starRow(n) {
+    let out = '';
+    for (let i = 0; i < CONFIG.wanted.maxStars; i++) {
+      out += `<span class="${i < n ? 'star on' : 'star'}">★</span>`;
     }
+    return out;
   }
-
-  // Title screen.
-  const titleScreen = makeScreen('title');
-  titleScreen.appendChild(el(document, 'h1', 'sm-title', 'SOLMARINA'));
-  titleScreen.appendChild(el(document, 'p', 'sm-tagline', 'Sun. Salt. Speed. One debt to clear.'));
-  const btnNew = el(document, 'button', 'sm-btn', 'New Game');
-  const btnContinue = el(document, 'button', 'sm-btn', 'Continue');
-  const btnHow = el(document, 'button', 'sm-btn', 'How to play');
-  btnNew.addEventListener('click', () => dispatch('new-game'));
-  btnContinue.addEventListener('click', () => dispatch('continue'));
-  btnHow.addEventListener('click', () => setScreen('howto'));
-  titleScreen.appendChild(btnNew);
-  titleScreen.appendChild(btnContinue);
-  titleScreen.appendChild(btnHow);
-  titleScreen.appendChild(el(document, 'p', 'sm-footnote', 'An original open-world crime game. Drive, earn, survive.'));
-  titleScreen.appendChild(el(document, 'p', 'sm-footnote', 'WASD drive · F enter car · E interact · Space handbrake · P pause · M mute'));
-
-  // How to play (shown over the title screen).
-  const howScreen = makeScreen('howto');
-  howScreen.appendChild(el(document, 'h2', 'sm-heading', 'How to play'));
-  const howList = el(document, 'ul', 'sm-howlist');
-  [
-    'WASD / arrows — drive or walk. Mouse — look around.',
-    'F — enter / exit a car. E — interact. Space — jump / handbrake.',
-    'Left click — punch or shoot. R — reload. Shift — run.',
-    'Follow the yellow marker. Mara Voss pays per job.',
-    'Stars mean the Solmarina PD is hunting you. Lose them or hide.',
-    'Find all 10 hidden packages for $100 each.',
-    'P — pause. Your progress saves automatically.',
-  ].forEach((line) => howList.appendChild(el(document, 'li', null, line)));
-  howScreen.appendChild(howList);
-  const btnHowBack = el(document, 'button', 'sm-btn', 'Back');
-  btnHowBack.addEventListener('click', () => setScreen('title'));
-  howScreen.appendChild(btnHowBack);
-
-  // Pause menu.
-  const pauseScreen = makeScreen('pause');
-  pauseScreen.appendChild(el(document, 'h2', 'sm-heading', 'Paused'));
-  const btnResume = el(document, 'button', 'sm-btn', 'Resume');
-  const btnQuitTitle = el(document, 'button', 'sm-btn', 'Save & title screen');
-  btnResume.addEventListener('click', () => dispatch('resume'));
-  btnQuitTitle.addEventListener('click', () => dispatch('to-title'));
-  pauseScreen.appendChild(btnResume);
-  pauseScreen.appendChild(btnQuitTitle);
-
-  // Game-over screen.
-  const overScreen = makeScreen('gameover');
-  overScreen.appendChild(el(document, 'h2', 'sm-heading', 'BUSTED / WASTED'));
-  overScreen.appendChild(el(document, 'p', 'sm-gameover-text', 'Jax is down. The debt is still waiting.'));
-  const btnRetry = el(document, 'button', 'sm-btn', 'Retry');
-  const btnOverTitle = el(document, 'button', 'sm-btn', 'Title screen');
-  btnRetry.addEventListener('click', () => dispatch('retry'));
-  btnOverTitle.addEventListener('click', () => dispatch('to-title'));
-  overScreen.appendChild(btnRetry);
-  overScreen.appendChild(btnOverTitle);
-
-  const screens = { title: titleScreen, howto: howScreen, pause: pauseScreen, gameover: overScreen };
-  let currentScreen = 'title';
-
-  function setScreen(name) {
-    // name: 'title' | 'howto' | 'pause' | 'gameover' | 'game'
-    Object.values(screens).forEach((s) => { s.style.display = 'none'; });
-    if (name === 'game') {
-      currentScreen = 'game';
-      root.classList.remove('sm-in-menu');
-      return;
-    }
-    const screen = screens[name];
-    if (!screen) return;
-    currentScreen = name;
-    root.classList.add('sm-in-menu');
-    // Refresh the Continue button every time the title shows: a save may
-    // have appeared since the HUD was built (e.g. after a pause-save).
-    if (name === 'title') {
-      btnContinue.style.display = hasSave() ? '' : 'none';
-    }
-    screen.style.display = 'flex';
-  }
-
-  function showMessage(text) {
-    if (!text) return;
-    const toast = el(document, 'div', 'sm-toast', text);
-    toasts.appendChild(toast);
-    while (toasts.childNodes.length > 3) toasts.removeChild(toasts.firstChild);
-    // Fade out and remove after 4 seconds.
-    setTimeout(() => {
-      toast.classList.add('sm-toast-fade');
-      setTimeout(() => { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 600);
-    }, 4000);
-  }
-
-  function showObjective(text, dist) {
-    if (text) {
-      objectiveText.textContent = text;
-      objective.style.display = 'flex';
-    } else {
-      objective.style.display = 'none';
-    }
-    objectiveDist.textContent = (dist === undefined || dist === null) ? '' : `${Math.round(dist)}m`;
-  }
-
-  // --- Minimap ------------------------------------------------------------------
-  function toMap(x, z) {
-    return [
-      ((x - CITY_MIN) / CITY_SPAN) * mapCanvas.width,
-      ((z - CITY_MIN) / CITY_SPAN) * mapCanvas.height,
-    ];
-  }
-
-  function drawMinimap(state) {
-    const w = mapCanvas.width;
-    const h = mapCanvas.height;
-    const ctx = mapCtx;
-    ctx.clearRect(0, 0, w, h);
-
-    // Land: green city, sand beach on the west edge, ocean beyond it.
-    ctx.fillStyle = '#3f7a3a';
-    ctx.fillRect(0, 0, w, h);
-    const [beachX] = toMap(-288, 0);
-    ctx.fillStyle = '#e8d28a';
-    ctx.fillRect(0, 0, beachX, h);
-    ctx.fillStyle = '#2f7fc2';
-    ctx.fillRect(0, 0, 10, h);
-    // Marina water along the south edge.
-    const [, marinaY] = toMap(0, 288);
-    ctx.fillStyle = '#2f7fc2';
-    ctx.fillRect(0, marinaY, w, h - marinaY);
-
-    // Roads: the real street grid (centres at -288..288, pitch 72).
-    ctx.strokeStyle = '#555555';
-    ctx.lineWidth = 3;
-    const roads = [-288, -216, -144, -72, 0, 72, 144, 216, 288];
-    roads.forEach((c) => {
-      const [mx] = toMap(c, 0);
-      const [, my] = toMap(0, c);
-      ctx.beginPath(); ctx.moveTo(mx, 0); ctx.lineTo(mx, h); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(0, my); ctx.lineTo(w, my); ctx.stroke();
-    });
-
-    // Mission markers as diamonds.
-    (state.markers || []).forEach((m) => {
-      const [mx, my] = toMap(m.x, m.z);
-      ctx.fillStyle = MARKER_COLORS[m.kind] || MARKER_COLORS.objective;
-      ctx.beginPath();
-      ctx.moveTo(mx, my - 7); ctx.lineTo(mx + 6, my);
-      ctx.lineTo(mx, my + 7); ctx.lineTo(mx - 6, my);
-      ctx.closePath(); ctx.fill();
-      ctx.strokeStyle = '#000000';
-      ctx.lineWidth = 1;
-      ctx.stroke();
-    });
-
-    // Traffic dots (white), gang (purple), police (flashing blue/red).
-    (state.cars || []).forEach((c) => {
-      const [mx, my] = toMap(c.x, c.z);
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(mx - 1.5, my - 1.5, 3, 3);
-    });
-    (state.gang || []).forEach((g) => {
-      const [mx, my] = toMap(g.x, g.z);
-      ctx.fillStyle = '#c77dff';
-      ctx.beginPath(); ctx.arc(mx, my, 3, 0, Math.PI * 2); ctx.fill();
-    });
-    const flash = Math.floor(Date.now() / 400) % 2 === 0;
-    (state.cops || []).forEach((c) => {
-      const [mx, my] = toMap(c.x, c.z);
-      ctx.fillStyle = flash ? '#3f8cff' : '#ff3f3f';
-      ctx.beginPath(); ctx.arc(mx, my, 3.5, 0, Math.PI * 2); ctx.fill();
-    });
-
-    // Player arrow, rotated by heading. The world's angle is measured
-    // from +z (south): on the map, south is down, so the up-pointing
-    // arrow turns by (PI - angle).
-    const p = state.player;
-    if (p) {
-      const [mx, my] = toMap(p.x, p.z);
-      ctx.save();
-      ctx.translate(mx, my);
-      ctx.rotate(Math.PI - (p.angle || 0));
-      ctx.fillStyle = '#ffffff';
-      ctx.strokeStyle = '#000000';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(0, -8); ctx.lineTo(5, 6); ctx.lineTo(-5, 6);
-      ctx.closePath(); ctx.fill(); ctx.stroke();
-      ctx.restore();
-    }
-
-    // North indicator.
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 12px sans-serif';
-    ctx.textAlign = 'left';
-    ctx.fillText('N', 6, 14);
-    ctx.beginPath();
-    ctx.moveTo(10, 18); ctx.lineTo(10, 26);
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-  }
-
-  // --- Per-frame update ----------------------------------------------------------
-  function update(state) {
-    if (!state) return;
-    const player = state.player || {};
-
-    // Wanted stars (0-5); the CSS pulses them while wanted.
-    const wanted = Math.max(0, Math.min(5, state.wanted || 0));
-    let starText = '';
-    for (let i = 0; i < 5; i += 1) starText += i < wanted ? '★' : '☆';
-    stars.textContent = starText;
-    stars.classList.toggle('sm-wanted', wanted > 0);
-
-    cash.textContent = formatCash(state.cash);
-    clock.textContent = formatClock(state.time);
-
-    // Health bar.
-    const health = Math.max(0, Math.min(100, player.health === undefined ? 100 : player.health));
-    healthFill.style.width = `${health}%`;
-    healthFill.classList.toggle('sm-health-low', health <= 25);
-    healthWrap.style.display = currentScreen === 'game' ? 'flex' : 'none';
-
-    // Speed + ammo (bottom-right). Speed only matters while driving: on
-    // foot the element is hidden rather than left showing a stale or
-    // wrong live value. Ammo only shows when the player has a weapon.
-    if (!player.onFoot) {
-      speed.textContent = formatSpeed(player.speed);
-      speed.style.display = 'block';
-    } else {
-      speed.style.display = 'none';
-    }
-    if (player.ammo !== undefined && player.ammo !== null) {
-      ammo.textContent = `AMMO ${player.ammo}`;
-      ammo.style.display = 'block';
-    } else {
-      ammo.style.display = 'none';
-    }
-
-    // Objective: state.message is the mission layer's objective line.
-    // Distance is measured to the first marker.
-    if (state.message) {
-      let dist = null;
-      if (state.markers && state.markers.length > 0) {
-        const m = state.markers[0];
-        dist = Math.hypot(player.x - m.x, player.z - m.z);
-      }
-      showObjective(state.message, dist);
-    } else if (!state.missionId) {
-      showObjective('', null);
-    }
-
-    drawMinimap(state);
-  }
-
-  // Start on the title screen (gameplay chrome hidden by .sm-in-menu).
-  setScreen('title');
 
   return {
-    update,
-    showMessage,
-    showObjective,
-    setScreen,
-    get screen() { return currentScreen; },
-    root,
+    setMoney(v) {
+      moneyEl.textContent = `$${Math.floor(v).toLocaleString('en-US')}`;
+    },
+
+    setHealth(v) {
+      const pct = clamp(v, 0, 100);
+      healthFill.style.width = `${pct}%`;
+      healthFill.style.background = pct > 50 ? '#4caf50' : pct > 25 ? '#ff9800' : '#f44336';
+      healthText.textContent = `${Math.ceil(v)} HP`;
+    },
+
+    setWanted(n) {
+      starsEl.innerHTML = starRow(n);
+      starsEl.classList.toggle('hot', n >= 3);
+    },
+
+    setObjective(text) {
+      if (objectiveEl.textContent !== text) objectiveEl.textContent = text;
+    },
+
+    /** Speed shows only while driving; ammo only on foot. */
+    setSpeed(kmh, driving) {
+      speedEl.style.display = driving ? 'block' : 'none';
+      if (driving) speedEl.textContent = `${Math.round(kmh)} km/h`;
+    },
+
+    setAmmo(mag, reserve) {
+      ammoEl.style.display = mag === null ? 'none' : 'block';
+      if (mag !== null) ammoEl.textContent = `AMMO ${mag} / ${reserve}`;
+    },
+
+    /** A centre toast that fades after a few seconds. */
+    toast(text) {
+      toastEl.textContent = text;
+      toastEl.classList.add('show');
+      if (toastTimer) clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toastEl.classList.remove('show'), 3200);
+    },
+
+    showStart(hasSave, onStart, onNewGame) {
+      startScreen.style.display = 'flex';
+      objectiveEl.style.display = 'none';
+      newGameBtn.style.display = hasSave ? 'inline-block' : 'none';
+      startBtn.onclick = () => onStart(false);
+      newGameBtn.onclick = () => onNewGame();
+    },
+
+    hideStart() {
+      startScreen.style.display = 'none';
+      objectiveEl.style.display = 'block';
+    },
+
+    showDeath(onRespawn) {
+      deathScreen.style.display = 'flex';
+      respawnBtn.onclick = () => {
+        deathScreen.style.display = 'none';
+        onRespawn();
+      };
+    },
+
+    /** Draw the minimap: streets, beach, player, cars, police, objective. */
+    drawMinimap(state) {
+      const size = minimap.width;
+      const half = size / 2;
+      const scale = size / (CONFIG.worldSize + 60);
+      const toMap = (x, z) => [half + x * scale, half + z * scale];
+      mapCtx.clearRect(0, 0, size, size);
+      // Round clip so the map reads as a dial.
+      mapCtx.save();
+      mapCtx.beginPath();
+      mapCtx.arc(half, half, half - 2, 0, Math.PI * 2);
+      mapCtx.clip();
+      // Background: dark city, sand strip, water.
+      mapCtx.fillStyle = '#1d1d26';
+      mapCtx.fillRect(0, 0, size, size);
+      mapCtx.fillStyle = '#8a6a44';
+      const [bx] = toMap(CONFIG.beachX, 0);
+      mapCtx.fillRect(bx, 0, size - bx, size);
+      mapCtx.fillStyle = '#1d4e6b';
+      const [wx] = toMap(CONFIG.waterX, 0);
+      mapCtx.fillRect(wx, 0, size - wx, size);
+      // Streets.
+      mapCtx.strokeStyle = '#3f3f4d';
+      mapCtx.lineWidth = 2;
+      const step = CONFIG.block + CONFIG.roadWidth;
+      for (let v = -CONFIG.halfWorld; v <= CONFIG.halfWorld + 1; v += step) {
+        const [ax, ay] = toMap(v + CONFIG.roadWidth / 2, -CONFIG.halfWorld);
+        const [bx2, by2] = toMap(v + CONFIG.roadWidth / 2, CONFIG.halfWorld);
+        mapCtx.beginPath();
+        mapCtx.moveTo(ax, ay);
+        mapCtx.lineTo(bx2, by2);
+        mapCtx.stroke();
+        const [cx, cy] = toMap(-CONFIG.halfWorld, v + CONFIG.roadWidth / 2);
+        const [dx, dy] = toMap(CONFIG.halfWorld, v + CONFIG.roadWidth / 2);
+        mapCtx.beginPath();
+        mapCtx.moveTo(cx, cy);
+        mapCtx.lineTo(dx, dy);
+        mapCtx.stroke();
+      }
+      // The pier and the beacon.
+      mapCtx.strokeStyle = '#c9a86a';
+      mapCtx.lineWidth = 3;
+      const [px0, py0] = toMap(CONFIG.pier.x0, CONFIG.pier.z);
+      const [px1, py1] = toMap(CONFIG.pier.x1, CONFIG.pier.z);
+      mapCtx.beginPath();
+      mapCtx.moveTo(px0, py0);
+      mapCtx.lineTo(px1, py1);
+      mapCtx.stroke();
+      const [bx3, by3] = toMap(CONFIG.beacon.x, CONFIG.beacon.z);
+      mapCtx.fillStyle = '#ffd24d';
+      mapCtx.beginPath();
+      mapCtx.arc(bx3, by3, 3, 0, Math.PI * 2);
+      mapCtx.fill();
+      // Objective marker.
+      if (state.objective) {
+        const [ox, oy] = toMap(state.objective.x, state.objective.z);
+        mapCtx.fillStyle = '#ffd24d';
+        mapCtx.beginPath();
+        mapCtx.arc(ox, oy, 4, 0, Math.PI * 2);
+        mapCtx.fill();
+        mapCtx.strokeStyle = '#ffd24d';
+        mapCtx.lineWidth = 1.5;
+        mapCtx.beginPath();
+        mapCtx.arc(ox, oy, 7 + Math.sin(performance.now() * 0.005) * 2, 0, Math.PI * 2);
+        mapCtx.stroke();
+      }
+      // Traffic as pale dots, police as red dots, enemies as orange dots.
+      const dot = (x, z, color, r) => {
+        const [mx, my] = toMap(x, z);
+        mapCtx.fillStyle = color;
+        mapCtx.beginPath();
+        mapCtx.arc(mx, my, r, 0, Math.PI * 2);
+        mapCtx.fill();
+      };
+      for (const c of state.cars || []) dot(c.x, c.z, '#b8b8c8', 2);
+      for (const p of state.police || []) dot(p.x, p.z, '#ff4444', 2.5);
+      for (const e of state.enemies || []) dot(e.x, e.z, '#ff8800', 2.5);
+      // The player: a white arrow pointing where they face.
+      const [ux, uy] = toMap(state.playerX, state.playerZ);
+      mapCtx.save();
+      mapCtx.translate(ux, uy);
+      mapCtx.rotate(Math.atan2(Math.sin(state.heading), Math.cos(state.heading)) * -1 + Math.PI);
+      mapCtx.fillStyle = '#ffffff';
+      mapCtx.beginPath();
+      mapCtx.moveTo(0, -6);
+      mapCtx.lineTo(4, 5);
+      mapCtx.lineTo(-4, 5);
+      mapCtx.closePath();
+      mapCtx.fill();
+      mapCtx.restore();
+      mapCtx.restore();
+      // Ring around the dial.
+      mapCtx.strokeStyle = 'rgba(255,255,255,0.7)';
+      mapCtx.lineWidth = 2;
+      mapCtx.beginPath();
+      mapCtx.arc(half, half, half - 2, 0, Math.PI * 2);
+      mapCtx.stroke();
+    },
   };
 }

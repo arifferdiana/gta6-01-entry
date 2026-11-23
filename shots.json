@@ -1,1 +1,1 @@
-[{"name":"1-title.jpg","query":"?shot=title&seed=1"},{"name":"3-chase.jpg","query":"?shot=chase&seed=1"},{"name":"2-drive.jpg","query":"?shot=drive&seed=1"},{"name":"4-mission.jpg","query":"?shot=mission&seed=1"}]
+{"shots":[{"file":"1-title.jpg","shot":1,"title":"Title screen over Solmarina at dusk"},{"file":"2-drive.jpg","shot":2,"title":"Driving the getaway through downtown"},{"file":"3-chase.jpg","shot":3,"title":"A three-star pursuit on the avenue"},{"file":"4-mission.jpg","shot":4,"title":"The pier firefight under the beacon"}]}

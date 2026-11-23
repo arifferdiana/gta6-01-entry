@@ -1,148 +1,137 @@
-// SOLMARINA — every tuning number and colour in one place.
-// The city is a fixed-size grid world; nothing below depends on the screen size.
+// SOLMARINA — shared tuning and world constants.
+// Every number that more than one system needs lives here, so the city,
+// the cars, the police and the missions all agree on the same Solmarina.
 
-/** The simulation's fixed step, in seconds: 60 updates a second whatever the display's rate. */
-export const STEP = 1 / 60;
+export const CONFIG = {
+  // The city is a square street grid centred on the origin.
+  worldSize: 640,
+  halfWorld: 320,
+  block: 64, // one city block, edge to edge
+  roadWidth: 14, // street width between blocks
+  sidewalk: 5, // pavement strip along each street
 
-/** City layout: 8x8 blocks, each 60 units, separated by 12-unit roads. */
-export const CITY = {
-  blocks: 8,
-  block: 60,
-  road: 12,
-  pitch: 72,
-  /** Full width of the road grid, edge road centre to edge road centre. */
-  size: 576,
-  /** Half of size: the road grid spans [-288, 288] on both axes. */
-  half: 288,
-  /** Beach strip west of the grid, then open ocean. */
-  beachWidth: 72,
-  oceanWidth: 420,
+  // The east edge of the map is the coast: sand, then open water.
+  beachX: 296, // where the sand starts
+  waterX: 330, // where the water starts
+  // The pier runs out over the water at z = 0.
+  pier: { x0: 296, x1: 402, z: 0, width: 18 },
+  // The beacon tower stands at the end of the pier.
+  beacon: { x: 394, z: 0 },
+  // Landmark addresses the missions use (all on street centrelines).
+  hospital: { x: -242, z: -164 },
+  safehouse: { x: -164, z: 226 },
+  warehouse: { x: 226, z: -164 },
+  marina: { x: 224, z: 224 },
+  docks: { x: 256, z: 256 },
+
+  // Dusk palette: a low orange sun over a purple-blue city.
+  colors: {
+    skyTop: 0x232f57,
+    skyMid: 0x6b4368,
+    horizon: 0xff9a5c,
+    sun: 0xffb347,
+    fog: 0x4a3a5e,
+    road: 0x2b2b33,
+    roadLine: 0xd8d8c8,
+    sidewalk: 0x4d4d58,
+    sand: 0xd9b380,
+    water: 0x1d4e6b,
+    grass: 0x2c4a28,
+    buildingRoof: 0x3a3a44,
+  },
+
+  // On-foot player.
+  player: {
+    walkSpeed: 6,
+    runSpeed: 11,
+    radius: 0.7,
+    health: 100,
+    eyeHeight: 1.7,
+  },
+
+  // Cars: arcade handling, forgiving on purpose.
+  car: {
+    accel: 17,
+    brake: 36,
+    maxSpeed: 46, // about 165 km/h
+    maxReverse: 15,
+    steer: 2.1, // radians per second at full lock, scaled by speed
+    radius: 2.1,
+    trafficSpeed: 9,
+    trafficCount: 14,
+  },
+
+  // Pedestrians.
+  people: {
+    count: 12,
+    walkSpeed: 1.6,
+    fleeSpeed: 4.5,
+  },
+
+  // Wanted level: heat points fill the meter; stars are heat / 20.
+  wanted: {
+    maxStars: 5,
+    heatPerStar: 20,
+    decayPerSec: 5, // heat lost while no police can see the player
+    stealHeat: 25,
+    shootHeat: 14,
+    speedHeat: 5,
+    killHeat: 30,
+    cruiserPerStar: 1, // cruisers on the street per star, capped below
+    maxCruisers: 5,
+    roadblockAtStars: 3,
+  },
+
+  // Combat.
+  combat: {
+    magSize: 24,
+    reserveAmmo: 120,
+    reloadSeconds: 1.4,
+    damage: 34,
+    enemyHealth: 70,
+    enemyDamage: 8,
+    enemyRange: 55,
+    enemyFireDelay: 1.1,
+  },
+
+  money: { start: 500, deathLoss: 0.1 },
+
+  // How far the camera sits behind the player.
+  camera: { footDistance: 8.5, footHeight: 4.0, carDistance: 13, carHeight: 5.8 },
+
+  keys: {
+    forward: ['KeyW', 'ArrowUp'],
+    back: ['KeyS', 'ArrowDown'],
+    left: ['KeyA', 'ArrowLeft'],
+    right: ['KeyD', 'ArrowRight'],
+    run: ['ShiftLeft', 'ShiftRight'],
+    interact: ['KeyE'],
+    brake: ['Space'],
+    reload: ['KeyR'],
+    mute: ['KeyM'],
+  },
 };
 
-/** Districts, as rectangles in world units (x east, z south; origin is the city centre). */
-export const DISTRICTS = {
-  downtown: { x0: -144, z0: -144, x1: 144, z1: 144 },
-  beach: { x0: -360, z0: -288, x1: -288, z1: 288 },
-  marina: { x0: -180, z0: 288, x1: 180, z1: 372 },
-  suburbs: { x0: 144, z0: -288, x1: 288, z1: 288 },
-  park: { x0: 144, z0: -288, x1: 288, z1: -144 },
-};
+/** Clamp a number into [lo, hi]. */
+export function clamp(v, lo, hi) {
+  return v < lo ? lo : v > hi ? hi : v;
+}
 
-export const PLAYER = {
-  walkSpeed: 7,
-  runSpeed: 11,
-  radius: 0.7,
-  health: 100,
-  jumpSpeed: 8,
-  gravity: 24,
-  punchDamage: 12,
-  punchRange: 2.2,
-  punchCooldown: 0.45,
-};
+/** Linear interpolation. */
+export function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
 
-export const CAR = {
-  accel: 22,
-  brake: 34,
-  reverseAccel: 12,
-  maxSpeed: 42,
-  sportMaxSpeed: 55,
-  maxReverse: 12,
-  turnRate: 1.9,
-  grip: 6,
-  radius: 1.6,
-  /** Handbrake (Space while driving) multiplies lateral grip down and boosts turn. */
-  handbrakeTurn: 2.6,
-  /** Seconds a car keeps rolling after the driver leaves it. */
-  coastTime: 1.2,
-};
+/** Wrap an angle into [-PI, PI]. */
+export function wrapAngle(a) {
+  while (a > Math.PI) a -= Math.PI * 2;
+  while (a < -Math.PI) a += Math.PI * 2;
+  return a;
+}
 
-/** Traffic and pedestrians: a few more of each than the first draft, so the streets
- *  read as busy in the screenshots without changing the frame budget. */
-export const TRAFFIC = {
-  cars: 16,
-  peds: 28,
-  cruiseSpeed: 9,
-  pedSpeed: 1.6,
-  spawnRadius: 220,
-  despawnRadius: 260,
-};
-
-export const POLICE = {
-  cars: 4,
-  cruiseSpeed: 13,
-  chaseSpeed: 30,
-  ramDamage: 8,
-  /** Wanted stars decay one level per this many seconds of staying out of sight. */
-  decaySeconds: 25,
-  /** A cop that cannot reach the player for this long gives up the chase. */
-  giveUpSeconds: 20,
-};
-
-export const COMBAT = {
-  pistolDamage: 25,
-  pistolRange: 55,
-  pistolMagazine: 12,
-  pistolReload: 1.1,
-  pistolCooldown: 0.22,
-  spread: 0.03,
-  copDamage: 9,
-  copRange: 38,
-  copCooldown: 0.9,
-  gangDamage: 11,
-  gangRange: 34,
-  gangCooldown: 1.1,
-};
-
-export const WANTED_MAX = 5;
-/** Wanted stars earned by each crime. */
-export const HEAT = {
-  punchPed: 1,
-  shoot: 1,
-  killPed: 2,
-  killCop: 2,
-  stealCar: 1,
-};
-
-export const MISSIONS = {
-  /** Cash paid for the first story mission; later missions scale from here. */
-  basePayout: 500,
-  payoutStep: 250,
-};
-
-/** Prices at the hospital / garage / gun shop, in cash. */
-export const PRICES = {
-  heal: 150,
-  repair: 200,
-  pistolAmmo: 80,
-  armour: 300,
-};
-
-export const PALETTE = {
-  skyTop: '#2f7fc9',
-  skyHorizon: '#ffd9a0',
-  sun: '#fff3c4',
-  fog: '#f7c98a',
-  ground: '#3a3f46',
-  road: '#33373d',
-  roadLine: '#e8d27a',
-  sidewalk: '#b9ac93',
-  sand: '#ecd3a0',
-  ocean: '#1e9db4',
-  oceanDeep: '#0f6f8f',
-  grass: '#5da24a',
-  building: ['#e8b48a', '#d99a6c', '#f0cfa8', '#c98d7a', '#e6d3b3', '#b7c4c9'],
-  glass: '#7fb8d8',
-  palmTrunk: '#8a6b4a',
-  palmLeaf: '#3f9e4d',
-  player: '#e84c3d',
-  playerPants: '#2b3a55',
-  cop: '#24407a',
-  gang: '#7a2e8f',
-  beacon: '#ffd94d',
-  pier: '#8a6b4a',
-};
-
-export const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';
-
-/** Where the save lives between visits (this browser only). */
-export const SAVE_KEY = 'solmarina.save.v1';
+/** Distance between two points on the ground plane. */
+export function dist2d(ax, az, bx, bz) {
+  const dx = ax - bx;
+  const dz = az - bz;
+  return Math.sqrt(dx * dx + dz * dz);
+}
